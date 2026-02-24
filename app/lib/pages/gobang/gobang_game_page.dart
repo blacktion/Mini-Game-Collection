@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
+import '../../config.dart';
 import '../../widgets/gobang_board_widget.dart';
 import '../../widgets/gobang_color_choice_button.dart';
 
@@ -50,7 +51,7 @@ class _GobangGamePageState extends State<GobangGamePage> {
   }
 
   void _initSocket() {
-    const String serverUrl = 'http://49.232.112.230:5000';
+    const String serverUrl = serverUrlConfig;
 
     _socket = IO.io(
       serverUrl,

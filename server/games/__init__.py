@@ -6,3 +6,4 @@ from .go import *
 from .othello import *
 from .doudizhu import *
 from .chinese_checkers import *
+from .international_chess import *

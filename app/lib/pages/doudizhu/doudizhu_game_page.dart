@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
+import '../../config.dart';
 import '../../widgets/doudizhu_playing_card.dart';
 import '../../widgets/doudizhu_hand_widget.dart';
 
@@ -59,7 +60,7 @@ class _DoudizhuGamePageState extends State<DoudizhuGamePage> {
   }
 
   void _initSocket() {
-    const String serverUrl = 'http://49.232.112.230:5000';
+    const String serverUrl = serverUrlConfig;
 
     _socket = IO.io(
       serverUrl,

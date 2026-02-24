@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
+import '../../config.dart';
 import '../../widgets/go_board_widget.dart';
 
 class GoGamePage extends StatefulWidget {
@@ -44,7 +45,7 @@ class _GoGamePageState extends State<GoGamePage> {
   }
 
   void _initSocket() {
-    const String serverUrl = 'http://49.232.112.230:5000';
+    const String serverUrl = serverUrlConfig;
 
     _socket = IO.io(
       serverUrl,

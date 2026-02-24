@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import '../../config.dart';
-import '../../widgets/othello/othello_board_widget.dart';
+import '../../widgets/international_chess_board_widget.dart';
 import '../../widgets/gobang_color_choice_button.dart';
 
 enum GameStatus {
@@ -13,16 +13,16 @@ enum GameStatus {
   gameOver,
 }
 
-class OthelloGamePage extends StatefulWidget {
+class InternationalChessGamePage extends StatefulWidget {
   final String? roomId;
 
-  const OthelloGamePage({super.key, this.roomId});
+  const InternationalChessGamePage({super.key, this.roomId});
 
   @override
-  State<OthelloGamePage> createState() => _OthelloGamePageState();
+  State<InternationalChessGamePage> createState() => _InternationalChessGamePageState();
 }
 
-class _OthelloGamePageState extends State<OthelloGamePage> {
+class _InternationalChessGamePageState extends State<InternationalChessGamePage> {
   late IO.Socket _socket;
   String? _myRoomId;
   String? _mySid;
@@ -33,14 +33,14 @@ class _OthelloGamePageState extends State<OthelloGamePage> {
   String _myChoice = '';
   bool _isGameOver = false;
 
+  // 8x8 board: 0=empty, positive=white, negative=black
+  // 1/King, 2/Queen, 3/Rook, 4/Bishop, 5/Knight, 6/Pawn
   List<List<int>> _board = List.generate(8, (i) => List.filled(8, 0));
   bool _myTurn = false;
-  List<Map<String, int>> _validMoves = [];
-  int? _lastMoveRow;
-  int? _lastMoveCol;
-
-  int _blackScore = 0;
-  int _whiteScore = 0;
+  int? _lastMoveFromRow;
+  int? _lastMoveFromCol;
+  int? _lastMoveToRow;
+  int? _lastMoveToCol;
 
   @override
   void initState() {
@@ -73,7 +73,7 @@ class _OthelloGamePageState extends State<OthelloGamePage> {
       setState(() {
         _myRoomId = data['room_id'];
         _playerColor = data['player_color'];
-        _myPlayerNumber = data['player_color'] == 'black' ? 1 : 2;
+        _myPlayerNumber = data['player_color'] == 'white' ? 1 : 2;
         _status = GameStatus.waiting;
       });
     });
@@ -91,27 +91,27 @@ class _OthelloGamePageState extends State<OthelloGamePage> {
         _board = _parseBoard(data['board']);
         _myPlayerNumber = data['player'];
         _playerColor = data['player_color'];
-        _myTurn = _myPlayerNumber == 1;
-        _calculateScores();
-        _validMoves = _calculateValidMoves(_myPlayerNumber!);
+        _myTurn = data['current_player'] == 1 || data['current_player'] == -1
+            ? (data['current_player'] == 1 && _playerColor == 'white') ||
+               (data['current_player'] == -1 && _playerColor == 'black')
+            : false;
       });
     });
 
     _socket.on('move_made', (data) {
       print('Move made by player ${data['player']}');
       setState(() {
-        final move = data['move'];
-        _placePieceAndFlip(move['row'], move['col'], data['player']);
-        _lastMoveRow = move['row'];
-        _lastMoveCol = move['col'];
-        _myTurn = data['current_player'] == _myPlayerNumber;
-        _calculateScores();
-        _validMoves = _calculateValidMoves(_myPlayerNumber!);
-
-        if (_validMoves.isEmpty && !_isBoardFull() && !_hasAnyValidMoves(_myPlayerNumber == 1 ? 2 : 1)) {
-          _status = GameStatus.gameOver;
-          _determineWinner();
-        }
+        final from = data['from'];
+        final to = data['to'];
+        _board[to['row']][to['col']] = _board[from['row']][from['col']];
+        _board[from['row']][from['col']] = 0;
+        _lastMoveFromRow = from['row'];
+        _lastMoveFromCol = from['col'];
+        _lastMoveToRow = to['row'];
+        _lastMoveToCol = to['col'];
+        _myTurn = data['current_player'] == 1
+            ? _playerColor == 'white'
+            : _playerColor == 'black';
       });
     });
 
@@ -119,7 +119,7 @@ class _OthelloGamePageState extends State<OthelloGamePage> {
       print('Player left');
       setState(() {
         _status = GameStatus.gameOver;
-        _winner = _myPlayerNumber == 1 ? '黑方' : '白方';
+        _winner = _myPlayerNumber == 1 ? '白方' : '黑方';
       });
     });
 
@@ -127,7 +127,8 @@ class _OthelloGamePageState extends State<OthelloGamePage> {
       print('Game over: ${data['winner']}');
       setState(() {
         _status = GameStatus.gameOver;
-        _winner = data['winner'];
+        _isGameOver = true;
+        _winner = data['winner'] == 1 ? '白方' : (data['winner'] == -1 ? '黑方' : '平局');
       });
     });
 
@@ -136,6 +137,22 @@ class _OthelloGamePageState extends State<OthelloGamePage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(data['message'])),
       );
+    });
+
+    _socket.on('turn_changed', (data) {
+      setState(() {
+        _myTurn = data['current_player'] == 1
+            ? _playerColor == 'white'
+            : _playerColor == 'black';
+      });
+    });
+
+    _socket.on('reset_game', (data) {
+      setState(() {
+        _status = GameStatus.selecting;
+        _myChoice = '';
+        _board = List.generate(8, (i) => List.filled(8, 0));
+      });
     });
 
     _socket.onDisconnect((_) {
@@ -147,11 +164,11 @@ class _OthelloGamePageState extends State<OthelloGamePage> {
 
   void _joinOrCreateRoom() {
     if (widget.roomId == null) {
-      _socket.emit('create_room', {'game_type': 'othello'});
+      _socket.emit('create_room', {'game_type': 'international_chess'});
     } else {
       _socket.emit('join_room', {
         'room_id': widget.roomId,
-        'game_type': 'othello'
+        'game_type': 'international_chess'
       });
     }
   }
@@ -165,131 +182,38 @@ class _OthelloGamePageState extends State<OthelloGamePage> {
 
   List<List<int>> _initializeBoard() {
     final board = List.generate(8, (i) => List.filled(8, 0));
-    board[3][3] = 2;
-    board[3][4] = 1;
-    board[4][3] = 1;
-    board[4][4] = 2;
+
+    // White pieces (row 0) - bottom visually
+    board[0][0] = 3;   // Rook
+    board[0][1] = 5;   // Knight
+    board[0][2] = 4;   // Bishop
+    board[0][3] = 2;   // Queen
+    board[0][4] = 1;   // King
+    board[0][5] = 4;   // Bishop
+    board[0][6] = 5;   // Knight
+    board[0][7] = 3;   // Rook
+
+    // White pawns (row 1)
+    for (int col = 0; col < 8; col++) {
+      board[1][col] = 6;
+    }
+
+    // Black pawns (row 6)
+    for (int col = 0; col < 8; col++) {
+      board[6][col] = -6;
+    }
+
+    // Black pieces (row 7) - top visually
+    board[7][0] = -3;  // Rook
+    board[7][1] = -5;  // Knight
+    board[7][2] = -4;  // Bishop
+    board[7][3] = -2;  // Queen
+    board[7][4] = -1;  // King
+    board[7][5] = -4;  // Bishop
+    board[7][6] = -5;  // Knight
+    board[7][7] = -3;  // Rook
+
     return board;
-  }
-
-  void _calculateScores() {
-    _blackScore = 0;
-    _whiteScore = 0;
-    for (int row = 0; row < 8; row++) {
-      for (int col = 0; col < 8; col++) {
-        if (_board[row][col] == 1) {
-          _blackScore++;
-        } else if (_board[row][col] == 2) {
-          _whiteScore++;
-        }
-      }
-    }
-  }
-
-  List<Map<String, int>> _calculateValidMoves(int player) {
-    List<Map<String, int>> moves = [];
-    for (int row = 0; row < 8; row++) {
-      for (int col = 0; col < 8; col++) {
-        if (_isValidMove(row, col, player)) {
-          moves.add({'row': row, 'col': col});
-        }
-      }
-    }
-    return moves;
-  }
-
-  bool _isValidMove(int row, int col, int player) {
-    if (_board[row][col] != 0) return false;
-
-    final opponent = player == 1 ? 2 : 1;
-    final directions = [
-      [-1, -1], [-1, 0], [-1, 1],
-      [0, -1],          [0, 1],
-      [1, -1], [1, 0], [1, 1],
-    ];
-
-    for (var dir in directions) {
-      int r = row + dir[0];
-      int c = col + dir[1];
-      bool foundOpponent = false;
-
-      while (r >= 0 && r < 8 && c >= 0 && c < 8) {
-        if (_board[r][c] == opponent) {
-          foundOpponent = true;
-        } else if (_board[r][c] == player) {
-          if (foundOpponent) return true;
-          break;
-        } else {
-          break;
-        }
-        r += dir[0];
-        c += dir[1];
-      }
-    }
-    return false;
-  }
-
-  List<Map<String, int>> _getFlippedPieces(int row, int col, int player) {
-    List<Map<String, int>> flipped = [];
-    final opponent = player == 1 ? 2 : 1;
-    final directions = [
-      [-1, -1], [-1, 0], [-1, 1],
-      [0, -1],          [0, 1],
-      [1, -1], [1, 0], [1, 1],
-    ];
-
-    for (var dir in directions) {
-      List<Map<String, int>> potentialFlips = [];
-      int r = row + dir[0];
-      int c = col + dir[1];
-
-      while (r >= 0 && r < 8 && c >= 0 && c < 8) {
-        if (_board[r][c] == opponent) {
-          potentialFlips.add({'row': r, 'col': c});
-        } else if (_board[r][c] == player) {
-          if (potentialFlips.isNotEmpty) {
-            flipped.addAll(potentialFlips);
-          }
-          break;
-        } else {
-          break;
-        }
-        r += dir[0];
-        c += dir[1];
-      }
-    }
-    return flipped;
-  }
-
-  void _placePieceAndFlip(int row, int col, int player) {
-    _board[row][col] = player;
-    final flipped = _getFlippedPieces(row, col, player);
-    for (var piece in flipped) {
-      _board[piece['row']!][piece['col']!] = player;
-    }
-  }
-
-  bool _isBoardFull() {
-    for (int row = 0; row < 8; row++) {
-      for (int col = 0; col < 8; col++) {
-        if (_board[row][col] == 0) return false;
-      }
-    }
-    return true;
-  }
-
-  bool _hasAnyValidMoves(int player) {
-    return _calculateValidMoves(player).isNotEmpty;
-  }
-
-  void _determineWinner() {
-    if (_blackScore > _whiteScore) {
-      _winner = '黑方';
-    } else if (_whiteScore > _blackScore) {
-      _winner = '白方';
-    } else {
-      _winner = '平局';
-    }
   }
 
   void _chooseColor(String choice) {
@@ -306,19 +230,15 @@ class _OthelloGamePageState extends State<OthelloGamePage> {
     });
   }
 
-  void _makeMove(int row, int col) {
+  void _makeMove(int fromRow, int fromCol, int toRow, int toCol) {
     if (!_myTurn || _status != GameStatus.playing) return;
 
     _socket.emit('make_move', {
       'room_id': _myRoomId,
-      'row': row,
-      'col': col
-    });
-  }
-
-  void _resetGame() {
-    _socket.emit('reset_game', {
-      'room_id': _myRoomId,
+      'row': fromRow,
+      'col': fromCol,
+      'to_row': toRow,
+      'to_col': toCol
     });
   }
 
@@ -338,9 +258,7 @@ class _OthelloGamePageState extends State<OthelloGamePage> {
     Navigator.pop(context);
   }
 
-  // 显示退出确认对话框
   void _showLeaveConfirmDialog() {
-    // 游戏结束时不需要确认
     if (_isGameOver) {
       _leaveRoom();
       return;
@@ -398,64 +316,10 @@ class _OthelloGamePageState extends State<OthelloGamePage> {
         );
       case GameStatus.gameOver:
         return Text(
-          '游戏结束！$_winner获胜',
+          '游戏结束！$_winner',
           style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
         );
     }
-  }
-
-  Widget _buildScoreBoard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          Column(
-            children: [
-              Container(
-                width: 30,
-                height: 30,
-                decoration: const BoxDecoration(
-                  color: Colors.black,
-                  shape: BoxShape.circle,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text('黑方', style: TextStyle(fontSize: 16)),
-              Text('$_blackScore', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-            ],
-          ),
-          const Text('VS', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-          Column(
-            children: [
-              Container(
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: Colors.grey[400]!),
-                  shape: BoxShape.circle,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text('白方', style: TextStyle(fontSize: 16)),
-              Text('$_whiteScore', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-            ],
-          ),
-        ],
-      ),
-    );
   }
 
   Widget _buildColorSelectionScreen() {
@@ -474,14 +338,14 @@ class _OthelloGamePageState extends State<OthelloGamePage> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 ColorChoiceButton(
-                  label: '先手',
+                  label: '先手(白方)',
                   icon: Icons.arrow_forward,
                   selected: _myChoice == 'first',
                   onTap: () => _chooseColor('first'),
                 ),
                 const SizedBox(width: 32),
                 ColorChoiceButton(
-                  label: '后手',
+                  label: '后手(黑方)',
                   icon: Icons.arrow_back,
                   selected: _myChoice == 'second',
                   onTap: () => _chooseColor('second'),
@@ -512,32 +376,18 @@ class _OthelloGamePageState extends State<OthelloGamePage> {
                 const SizedBox(height: 20),
                 _buildStatusText(),
                 const SizedBox(height: 20),
-                _buildScoreBoard(),
-                const SizedBox(height: 20),
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: OthelloBoardWidget(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: InternationalChessBoardWidget(
                     board: _board,
-                    validMoves: _validMoves,
-                    onTap: _myTurn ? _makeMove : null,
-                    lastMoveRow: _lastMoveRow,
-                    lastMoveCol: _lastMoveCol,
+                    onMove: _myTurn ? _makeMove : null,
+                    lastMoveFromRow: _lastMoveFromRow,
+                    lastMoveFromCol: _lastMoveFromCol,
+                    lastMoveToRow: _lastMoveToRow,
+                    lastMoveToCol: _lastMoveToCol,
                   ),
                 ),
                 const SizedBox(height: 20),
-              ],
-            ),
-          ),
-        ),
-        Container(
-          height: 36,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Colors.brown[100]!.withOpacity(0.5),
-                Colors.brown[200]!.withOpacity(0.5),
               ],
             ),
           ),
@@ -557,10 +407,7 @@ class _OthelloGamePageState extends State<OthelloGamePage> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              if (_status == GameStatus.connecting)
-                const CircularProgressIndicator()
-              else
-                const CircularProgressIndicator(),
+              const CircularProgressIndicator(),
               const SizedBox(height: 24),
               if (_myRoomId != null)
                 Column(
@@ -610,15 +457,15 @@ class _OthelloGamePageState extends State<OthelloGamePage> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(_myRoomId != null ? '房间: $_myRoomId' : '黑白棋'),
+          title: Text(_myRoomId != null ? '房间: $_myRoomId' : '国际象棋'),
           backgroundColor: Theme.of(context).colorScheme.inversePrimary,
           centerTitle: true,
           actions: [
             IconButton(
               icon: const Icon(Icons.exit_to_app),
               onPressed: _showLeaveConfirmDialog,
-          ),
-        ],
+            ),
+          ],
         ),
         body: body,
       ),

@@ -6,6 +6,7 @@ import 'go/go_home_page.dart';
 import 'army_chess/army_chess_home_page.dart';
 import 'othello/othello_home_page.dart';
 import 'chinese_checkers/chinese_checkers_home_page.dart';
+import 'international_chess/international_chess_home_page.dart';
 
 class BoardGameSelectionPage extends StatelessWidget {
   const BoardGameSelectionPage({super.key});
@@ -110,6 +111,21 @@ class BoardGameSelectionPage extends StatelessWidget {
                     context,
                     MaterialPageRoute(
                       builder: (context) => const ChineseCheckersHomePage(),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 16),
+              BoardGameCard(
+                icon: Icons.grid_4x4,
+                title: '国际象棋',
+                subtitle: '经典策略游戏，国际对战',
+                color: Colors.purple,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const InternationalChessHomePage(),
                     ),
                   );
                 },
