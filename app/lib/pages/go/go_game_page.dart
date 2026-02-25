@@ -45,7 +45,7 @@ class _GoGamePageState extends State<GoGamePage> {
   }
 
   void _initSocket() {
-    const String serverUrl = serverUrlConfig;
+    final String serverUrl = serverUrlConfig;
 
     _socket = IO.io(
       serverUrl,

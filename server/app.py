@@ -326,7 +326,11 @@ def handle_create_room(data):
                 'game_over': False,
                 'game_started': False,  # 新增：游戏是否已开始
                 'winner': None,
-                'moves': []
+                'moves': [],
+                'last_move': None,      # 记录上一步移动
+                'last_move_path': [],   # 记录完整的跳跃路径
+                'undo_requested': False,  # 是否有待处理的悔棋请求
+                'last_undo_player': None  # 上次悔棋的玩家sid
             }
             player_color = 'red'
         elif game_type == 'doudizhu':
@@ -463,46 +467,6 @@ def handle_join_room(data):
             else:
                 emit('error', {'message': '房间已满'})
                 return
-        elif game['game_type'] == 'chinese_checkers':
-            # 寻找空位加入
-            # 对于双人游戏，第二人应分配到对面位置
-            player_info = None
-            player_index = -1
-            
-            # 检查是否是双人游戏模式（只有房主和一个对手）
-            joined_count = sum(1 for p in game['players'] if p['joined'])
-            
-            if joined_count == 1:  # 只有房主加入了，现在是第二个人加入
-                # 在双人模式中，让第二人坐在对面（蓝色位置）
-                # 查找蓝色位置
-                for i, player in enumerate(game['players']):
-                    if player['color'] == 'blue' and not player['joined']:
-                        player_info = player
-                        player_index = i
-                        break
-                # 如果没找到蓝色位置（理论上不会发生），则使用第一个可用位置
-                if player_info is None:
-                    for i, player in enumerate(game['players']):
-                        if not player['joined']:
-                            player_info = player
-                            player_index = i
-                            break
-            else:
-                # 非双人模式或多人游戏，按顺序分配
-                for i, player in enumerate(game['players']):
-                    if not player['joined']:
-                        player_info = player
-                        player_index = i
-                        break
-            
-            if player_info:
-                player_info['sid'] = sid
-                player_info['joined'] = True
-                player_color = player_info['color']
-                player_number = player_index + 1
-            else:
-                emit('error', {'message': '房间已满'})
-                return
         elif game['game_type'] == 'chinese_chess':
             if game['red_player'] is None:
                 game['red_player'] = sid
@@ -576,10 +540,15 @@ def handle_join_room(data):
                         break
             
             if player_info:
+                print(f"设置玩家信息前: {player_info}")
+                print(f"请求SID: {sid}")
                 player_info['sid'] = sid
                 player_info['joined'] = True
                 player_color = player_info['color']
                 player_number = player_index + 1
+                print(f"玩家加入房间 {room_id}: 分配颜色 {player_color}, 索引 {player_index}")
+                print(f"设置玩家信息后: {player_info}")
+                print(f"当前房间玩家状态: {[{'color': p['color'], 'sid': p['sid'], 'joined': p['joined']} for p in game['players']]}")
             else:
                 emit('error', {'message': '房间已满'})
                 return
@@ -1185,13 +1154,22 @@ def handle_pass_turn_handler(data):
 @socketio.on('undo_request')
 def handle_undo_request(data):
     """悔棋请求"""
+    print(f"=== 收到悔棋请求 ===")
+    print(f"请求数据: {data}")
+    
     room_id = data.get('room_id')
     sid = request.sid  # pyright: ignore[reportAttributeAccessIssue]
-
+    
+    print(f"房间ID: {room_id}, 请求者SID: {sid}")
+    
     if room_id not in games:
+        print(f"房间 {room_id} 不存在")
         return
-
+    
     game = games[room_id]
+    print(f"游戏类型: {game['game_type']}")
+    print(f"游戏状态: {'已结束' if game['game_over'] else '进行中'}")
+    print(f"移动记录数: {len(game.get('moves', []))}")
 
     # 斗地主和军棋不支持悔棋
     if game['game_type'] in ['doudizhu', 'army_chess']:
@@ -1210,34 +1188,49 @@ def handle_undo_request(data):
 
     # 获取当前玩家编号
     current_player = game['current_player']
-
+    print(f"当前玩家编号: {current_player}")
+        
     # 根据游戏类型获取对手 sid
     if game['game_type'] == 'chinese_chess':
         player_sid = game['red_player'] if current_player == 1 else game['black_player']
+        print(f"象棋对手SID: {player_sid}")
     elif game['game_type'] == 'go':
         player_sid = game['black_player'] if current_player == 1 else game['white_player']
+        print(f"围棋对手SID: {player_sid}")
     elif game['game_type'] == 'othello':
         player_sid = game['black_player'] if current_player == 1 else game['white_player']
     elif game['game_type'] == 'international_chess':
         player_sid = game['white_player'] if current_player == 1 else game['black_player']
+        print(f"黑白棋对手SID: {player_sid}")
+    elif game['game_type'] == 'chinese_checkers':
+        # 跳棋：向当前轮到的玩家发送悔棋请求
+        # current_player是当前轮到的玩家，也就是需要同意悔棋的玩家
+        current_player_info = game['players'][current_player - 1]
+        player_sid = current_player_info['sid']
+        print(f"跳棋当前轮到玩家SID: {player_sid}, 玩家信息: {current_player_info}")
     elif game['game_type'] == 'checkers':
         player_sid = game['red_player'] if current_player == 1 else game['blue_player']
+        print(f"西洋跳棋对手SID: {player_sid}")
     else:  # gobang
         player_sid = game['black_player'] if current_player == 1 else game['white_player']
+        print(f"五子棋对手SID: {player_sid}")
 
     # 检查是否已经有待处理的悔棋请求
     if game.get('undo_requested', False):
+        print(f"已经有待处理的悔棋请求")
         emit('error', {'message': '已经有待处理的悔棋请求'})
         return
 
     # 只能悔自己刚才走的那一步（轮到对方的时候请求）
     if sid == player_sid:
+        print(f"请求者SID {sid} 与目标玩家SID {player_sid} 相同，不能请求悔棋自己的棋")
         emit('error', {'message': '只能请求悔棋自己的棋'})
         return
 
     # 检查是否连续悔棋（上次悔棋的玩家不能连续悔棋）
     last_undo_player = game.get('last_undo_player')
     if last_undo_player == sid:
+        print(f"玩家 {sid} 不能连续悔棋")
         emit('error', {'message': '不能连续悔棋'})
         return
 
@@ -1246,6 +1239,8 @@ def handle_undo_request(data):
     game['undo_requester_sid'] = sid
 
     # 通知对方有悔棋请求
+    print(f"发送悔棋请求给玩家: {player_sid}")
+    print(f"发送数据: {{'player': {current_player}, 'room_id': '{room_id}'}}")
     socketio.emit('undo_request', {
         'player': current_player,
         'room_id': room_id
@@ -1282,6 +1277,11 @@ def handle_undo_response(data):
         current_sid = game['black_player'] if current_player == 1 else game['white_player']
     elif game['game_type'] == 'othello':
         current_sid = game['black_player'] if current_player == 1 else game['white_player']
+    elif game['game_type'] == 'chinese_checkers':
+        # 跳棋：根据当前玩家编号获取对应的玩家SID
+        current_player_index = (current_player - 1) % len(game['players'])
+        current_player_info = game['players'][current_player_index]
+        current_sid = current_player_info['sid']
     elif game['game_type'] == 'checkers':
         current_sid = game['red_player'] if current_player == 1 else game['blue_player']
     else:  # gobang
@@ -1321,23 +1321,22 @@ def handle_undo_response(data):
                     game['board'][flipped_pos['row']][flipped_pos['col']] = flipped_pos['old_color']
         elif game['game_type'] == 'chinese_checkers':
             # 跳棋悔棋
-            row = last_move['row']
-            col = last_move['col']
-            game['board'][row][col] = 0
-            # 恢复被移动的棋子到原位置
             from_row = last_move['from_row']
             from_col = last_move['from_col']
-            game['board'][from_row][from_col] = last_move['piece']
-            # 恢复被吃的棋子
-            if 'captures' in last_move:
-                for capture in last_move['captures']:
-                    cap_row = capture['row']
-                    cap_col = capture['col']
-                    game['board'][cap_row][cap_col] = {
-                        'color': capture['color'],
-                        'king': capture['type'] == 'king',
-                        'type': capture['type']
-                    }
+            to_row = last_move['to_row']
+            to_col = last_move['to_col']
+            
+            # 恢复棋子到原位置
+            piece = game['board'][to_row][to_col]
+            game['board'][from_row][from_col] = piece
+            game['board'][to_row][to_col] = None
+            
+            # 恢复上一步路径
+            path = last_move.get('path', [])
+            if path:
+                game['last_move_path'] = path
+            else:
+                game['last_move_path'] = [[from_row, from_col], [to_row, to_col]]
         elif game['game_type'] == 'international_chess':
             # 国际象棋悔棋
             from_row = last_move['from']['row']

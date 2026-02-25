@@ -51,7 +51,7 @@ class _GobangGamePageState extends State<GobangGamePage> {
   }
 
   void _initSocket() {
-    const String serverUrl = serverUrlConfig;
+    final String serverUrl = serverUrlConfig;
 
     _socket = IO.io(
       serverUrl,

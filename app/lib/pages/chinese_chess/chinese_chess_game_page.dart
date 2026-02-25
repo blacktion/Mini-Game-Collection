@@ -101,7 +101,7 @@ class _ChineseChessGamePageState extends State<ChineseChessGamePage> {
   }
 
   void _initSocket() {
-    const String serverUrl = serverUrlConfig;
+    final String serverUrl = serverUrlConfig;
 
     _socket = IO.io(
       serverUrl,

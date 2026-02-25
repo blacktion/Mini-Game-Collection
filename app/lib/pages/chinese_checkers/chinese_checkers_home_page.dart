@@ -37,7 +37,7 @@ class _ChineseCheckersHomePageState extends State<ChineseCheckersHomePage> {
       if (mounted) {
         setState(() => _isCreating = false);
       }
-      print('Error navigating to game page: $error');
+      
     });
   }
 
@@ -66,7 +66,7 @@ class _ChineseCheckersHomePageState extends State<ChineseCheckersHomePage> {
       if (mounted) {
         setState(() => _isJoining = false);
       }
-      print('Error navigating to game page: $error');
+      
     });
   }
 
