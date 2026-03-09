@@ -2,9 +2,114 @@
 五子棋游戏逻辑
 """
 
+import random
+
 # 全局变量，由主程序设置
 socketio = None
 games = None
+
+
+def initialize_gobang_game(sid):
+    """初始化五子棋游戏数据"""
+    return {
+        'game_type': 'gobang',
+        'black_player': None,
+        'white_player': None,
+        'black_choice': None,
+        'white_choice': None,
+        'board': [[0]*15 for _ in range(15)],
+        'current_player': 1,
+        'game_over': False,
+        'winner': None,
+        'moves': [],
+        'undo_requested': False,
+        'last_undo_player': None
+    }
+
+
+def get_gobang_player_info(game, sid):
+    """获取五子棋玩家信息，返回(玩家编号, 是否为黑方)"""
+    if game['black_player'] == sid:
+        return 1, True
+    elif game['white_player'] == sid:
+        return 2, False
+    return None, None
+
+
+def assign_gobang_player(game, sid):
+    """分配五子棋玩家颜色"""
+    if game['black_player'] is None:
+        game['black_player'] = sid
+        return 'black'
+    elif game['white_player'] is None:
+        game['white_player'] = sid
+        return 'white'
+    return None
+
+
+def record_gobang_choice(game, sid, choice):
+    """记录五子棋玩家的先后手选择"""
+    if game['black_player'] == sid:
+        game['black_choice'] = choice
+    elif game['white_player'] == sid:
+        game['white_choice'] = choice
+
+
+def should_start_gobang(game):
+    """检查是否可以开始五子棋游戏"""
+    return game['black_choice'] is not None and game['white_choice'] is not None
+
+
+def determine_gobang_first_player(game):
+    """确定五子棋先后手并可能交换玩家"""
+    if game['black_choice'] == game['white_choice']:
+        # 选择相同，随机决定
+        first_player_sid = random.choice([game['black_player'], game['white_player']])
+        is_black_first = (first_player_sid == game['black_player'])
+    else:
+        # 选择不同，先选先手的为先手
+        first_choice_sid = game['black_player'] if game['black_choice'] == 'first' else game['white_player']
+        is_black_first = (first_choice_sid == game['black_player'])
+
+    return is_black_first
+
+
+def get_gobang_current_player_sid(game):
+    """获取当前轮到的玩家sid"""
+    return game['black_player'] if game['current_player'] == 1 else game['white_player']
+
+
+def get_gobang_opponent_sid(game, sid):
+    """获取对手的sid"""
+    return game['white_player'] if sid == game['black_player'] else game['black_player']
+
+
+def handle_gobang_disconnect(game, sid):
+    """处理五子棋玩家断开连接，返回对手sid列表"""
+    if game['black_player'] == sid or game['white_player'] == sid:
+        opponent = get_gobang_opponent_sid(game, sid)
+        return [opponent] if opponent else []
+    return []
+
+
+def execute_gobang_undo(game, last_move):
+    """执行五子棋悔棋逻辑"""
+    row = last_move['row']
+    col = last_move['col']
+    game['board'][row][col] = 0
+
+
+def handle_gobang_surrender(game, sid):
+    """处理五子棋认输，返回(赢家编号, 赢家sid, 输家sid)"""
+    winner = 2 if sid == game['black_player'] else 1
+    winner_sid = game['black_player'] if winner == 1 else game['white_player']
+    loser_sid = game['white_player'] if winner == 1 else game['black_player']
+    return winner, winner_sid, loser_sid
+
+
+def get_gobang_winner_name(winner):
+    """获取五子棋赢家名称"""
+    return '黑棋' if winner == 1 else '白棋'
 
 
 def check_gobang_winner(board, row, col):

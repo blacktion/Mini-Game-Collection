@@ -6,6 +6,32 @@
 socketio = None
 games = None
 
+
+def initialize_international_chess_game(sid):
+    """初始化国际象棋游戏数据"""
+    return {
+        'game_type': 'international_chess',
+        'white_player': None,
+        'black_player': None,
+        'white_choice': None,
+        'black_choice': None,
+        'board': initialize_international_chess_board(),
+        'current_player': 1,
+        'game_over': False,
+        'winner': None,
+        'moves': [],
+        'white_choice': None,
+        'black_choice': None,
+        # 王车易位状态
+        'white_king_moved': False,
+        'black_king_moved': False,
+        'white_rook_h1_moved': False,
+        'white_rook_a1_moved': False,
+        'black_rook_h8_moved': False,
+        'black_rook_a8_moved': False
+    }
+
+
 # 棋子编码：正数为白方，负数为黑方
 # 1/King, 2/Queen, 3/Rook, 4/Bishop, 5/Knight, 6/Pawn
 WHITE_KING = 1
@@ -657,3 +683,89 @@ def reset_international_chess_game(game):
     game['white_rook_a1_moved'] = False
     game['black_rook_h8_moved'] = False
     game['black_rook_a8_moved'] = False
+
+
+def assign_international_chess_player(game, sid):
+    """分配国际象棋玩家颜色"""
+    if game['white_player'] is None:
+        game['white_player'] = sid
+        return 'white'
+    elif game['black_player'] is None:
+        game['black_player'] = sid
+        return 'black'
+    return None
+
+
+def record_international_chess_choice(game, sid, choice):
+    """记录国际象棋玩家的先后手选择"""
+    if game['white_player'] == sid:
+        game['white_choice'] = choice
+    elif game['black_player'] == sid:
+        game['black_choice'] = choice
+
+
+def should_start_international_chess(game):
+    """检查是否可以开始国际象棋游戏"""
+    return game['white_choice'] is not None and game['black_choice'] is not None
+
+
+def determine_international_chess_first_player(game):
+    """确定国际象棋先后手"""
+    if game['white_choice'] == 'first':
+        # 白棋先手（国际象棋默认）
+        is_white_first = True
+    else:
+        # 黑棋先手
+        is_white_first = False
+    return is_white_first
+
+
+def get_international_chess_current_player_sid(game):
+    """获取当前轮到的玩家sid"""
+    return game['white_player'] if game['current_player'] == 1 else game['black_player']
+
+
+def get_international_chess_opponent_sid(game, sid):
+    """获取对手的sid"""
+    return game['black_player'] if sid == game['white_player'] else game['white_player']
+
+
+def handle_international_chess_disconnect(game, sid):
+    """处理国际象棋玩家断开连接，返回对手sid"""
+    if game['white_player'] == sid or game['black_player'] == sid:
+        opponent = get_international_chess_opponent_sid(game, sid)
+        return [opponent] if opponent else []
+    return []
+
+
+def handle_international_chess_surrender(game, sid):
+    """处理国际象棋认输，返回(赢家编号, 赢家sid, 输家sid)"""
+    winner = -1 if sid == game['white_player'] else 1
+    winner_sid = game['white_player'] if winner == 1 else game['black_player']
+    loser_sid = game['black_player'] if winner == 1 else game['white_player']
+    return winner, winner_sid, loser_sid
+
+
+def get_international_chess_winner_name(winner):
+    """获取国际象棋赢家名称"""
+    if winner == 1:
+        return '白方'
+    elif winner == -1:
+        return '黑方'
+    else:
+        return '平局'
+
+
+def execute_international_chess_undo(game, last_move):
+    """执行国际象棋悔棋"""
+    from_row = last_move['from']['row']
+    from_col = last_move['from']['col']
+    to_row = last_move['to']['row']
+    to_col = last_move['to']['col']
+    # 恢复棋子到原位置
+    game['board'][from_row][from_col] = game['board'][to_row][to_col]
+    # 恢复被吃的棋子
+    if last_move.get('captured') != 0:
+        game['board'][to_row][to_col] = last_move['captured']
+    else:
+        game['board'][to_row][to_col] = 0

@@ -2,9 +2,127 @@
 中国象棋游戏逻辑
 """
 
+import random
+
 # 全局变量，由主程序设置
 socketio = None
 games = None
+
+
+def initialize_chinese_chess_game(sid):
+    """初始化中国象棋游戏数据"""
+    return {
+        'game_type': 'chinese_chess',
+        'red_player': None,
+        'black_player': None,
+        'red_choice': None,
+        'black_choice': None,
+        'board': initialize_chess_board(),
+        'current_player': 1,
+        'game_over': False,
+        'winner': None,
+        'moves': [],
+        'undo_requested': False,
+        'last_undo_player': None
+    }
+
+
+def assign_chinese_chess_player(game, sid):
+    """分配中国象棋玩家颜色"""
+    if game['red_player'] is None:
+        game['red_player'] = sid
+        return 'red'
+    elif game['black_player'] is None:
+        game['black_player'] = sid
+        return 'black'
+    return None
+
+
+def record_chinese_chess_choice(game, sid, choice):
+    """记录中国象棋玩家的先后手选择"""
+    if game['red_player'] == sid:
+        game['red_choice'] = choice
+    elif game['black_player'] == sid:
+        game['black_choice'] = choice
+
+
+def should_start_chinese_chess(game):
+    """检查是否可以开始中国象棋游戏"""
+    return game['red_choice'] is not None and game['black_choice'] is not None
+
+
+def determine_chinese_chess_first_player(game):
+    """确定中国象棋先后手并可能交换玩家"""
+    if game['red_choice'] == game['black_choice']:
+        # 选择相同，随机决定
+        first_player_sid = random.choice([game['red_player'], game['black_player']])
+        is_red_first = (first_player_sid == game['red_player'])
+    else:
+        # 选择不同，先选先手的为先手
+        first_choice_sid = game['red_player'] if game['red_choice'] == 'first' else game['black_player']
+        is_red_first = (first_choice_sid == game['red_player'])
+
+    # 如果黑方先手，交换红黑身份，因为象棋规则中红方总是先手
+    if not is_red_first:
+        game['red_player'], game['black_player'] = game['black_player'], game['red_player']
+        game['red_choice'], game['black_choice'] = game['black_choice'], game['red_choice']
+
+    return is_red_first
+
+
+def get_chinese_chess_current_player_sid(game):
+    """获取当前轮到的玩家sid"""
+    return game['red_player'] if game['current_player'] == 1 else game['black_player']
+
+
+def get_chinese_chess_opponent_sid(game, sid):
+    """获取对手的sid"""
+    return game['black_player'] if sid == game['red_player'] else game['red_player']
+
+
+def handle_chinese_chess_disconnect(game, sid):
+    """处理中国象棋玩家断开连接，返回对手sid列表"""
+    if game['red_player'] == sid or game['black_player'] == sid:
+        opponent = get_chinese_chess_opponent_sid(game, sid)
+        return [opponent] if opponent else []
+    return []
+
+
+def execute_chinese_chess_undo(game, last_move):
+    """执行中国象棋悔棋逻辑"""
+    game['board'][last_move['from_row']][last_move['from_col']] = last_move['piece']
+    game['board'][last_move['to_row']][last_move['to_col']] = last_move['captured']
+
+
+def handle_chinese_chess_surrender(game, sid):
+    """处理中国象棋认输，返回(赢家编号, 赢家sid, 输家sid)"""
+    winner = 2 if sid == game['red_player'] else 1
+    winner_sid = game['red_player'] if winner == 1 else game['black_player']
+    loser_sid = game['black_player'] if winner == 1 else game['red_player']
+    return winner, winner_sid, loser_sid
+
+
+def get_chinese_chess_winner_name(winner):
+    """获取中国象棋赢家名称"""
+    return '红方' if winner == 1 else '黑方'
+
+
+def prepare_chinese_chess_board_data(game):
+    """准备中国象棋棋盘数据用于发送"""
+    board_data = []
+    for row in game['board']:
+        row_data = []
+        for piece in row:
+            if piece:
+                row_data.append({
+                    'name': piece['name'],
+                    'type': piece['type'],
+                    'color': piece['color']
+                })
+            else:
+                row_data.append(None)
+        board_data.append(row_data)
+    return board_data
 
 
 def initialize_chess_board():
