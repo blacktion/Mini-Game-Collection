@@ -3,9 +3,109 @@
 包含工兵铁路路径、行营移动、路径显示等所有功能
 """
 
+import random
+
 # 全局变量，由主程序设置
 socketio = None
 games = None
+
+
+def initialize_army_chess_game(sid):
+    """初始化军棋游戏数据"""
+    return {
+        'game_type': 'army_chess',
+        'red_player': None,
+        'blue_player': None,
+        'red_choice': None,
+        'blue_choice': None,
+        'board': [[None]*5 for _ in range(12)],
+        'red_pieces': {},
+        'blue_pieces': {},
+        'current_player': 1,
+        'game_over': False,
+        'winner': None,
+        'moves': [],
+        'red_arranged': False,
+        'blue_arranged': False,
+        'red_mines': 3,
+        'blue_mines': 3,
+        'red_lost': [],
+        'blue_lost': []
+    }
+
+
+def assign_army_chess_player(game, sid):
+    """分配军棋玩家颜色"""
+    if game['red_player'] is None:
+        game['red_player'] = sid
+        return 'red'
+    elif game['blue_player'] is None:
+        game['blue_player'] = sid
+        return 'blue'
+    return None
+
+
+def record_army_chess_choice(game, sid, choice):
+    """记录军棋玩家的先后手选择"""
+    if game['red_player'] == sid:
+        game['red_choice'] = choice
+    elif game['blue_player'] == sid:
+        game['blue_choice'] = choice
+
+
+def should_start_army_chess(game):
+    """检查是否可以开始军棋游戏"""
+    return game['red_choice'] is not None and game['blue_choice'] is not None
+
+
+def determine_army_chess_first_player(game):
+    """确定军棋先后手并可能交换玩家"""
+    if game['red_choice'] == game['blue_choice']:
+        # 选择相同，随机决定
+        first_player_sid = random.choice([game['red_player'], game['blue_player']])
+        is_red_first = (first_player_sid == game['red_player'])
+    else:
+        # 选择不同，先选先手的为先手
+        first_choice_sid = game['red_player'] if game['red_choice'] == 'first' else game['blue_player']
+        is_red_first = (first_choice_sid == game['red_player'])
+
+    # 如果蓝方先手，交换红蓝身份
+    if not is_red_first:
+        game['red_player'], game['blue_player'] = game['blue_player'], game['red_player']
+        game['red_choice'], game['blue_choice'] = game['blue_choice'], game['red_choice']
+
+    return is_red_first
+
+
+def get_army_chess_current_player_sid(game):
+    """获取当前轮到的玩家sid"""
+    return game['red_player'] if game['current_player'] == 1 else game['blue_player']
+
+
+def get_army_chess_opponent_sid(game, sid):
+    """获取对手的sid"""
+    return game['blue_player'] if sid == game['red_player'] else game['red_player']
+
+
+def handle_army_chess_disconnect(game, sid):
+    """处理军棋玩家断开连接，返回对手sid列表"""
+    if game['red_player'] == sid or game['blue_player'] == sid:
+        opponent = get_army_chess_opponent_sid(game, sid)
+        return [opponent] if opponent else []
+    return []
+
+
+def handle_army_chess_surrender(game, sid):
+    """处理军棋认输，返回(赢家编号, 赢家sid, 输家sid)"""
+    winner = 2 if sid == game['red_player'] else 1
+    winner_sid = game['red_player'] if winner == 1 else game['blue_player']
+    loser_sid = game['blue_player'] if winner == 1 else game['red_player']
+    return winner, winner_sid, loser_sid
+
+
+def get_army_chess_winner_name(winner):
+    """获取军棋赢家名称"""
+    return '红方' if winner == 1 else '蓝方'
 
 
 def resolve_army_chess_battle(attacker_type, defender_type):
@@ -648,3 +748,81 @@ def reset_army_chess_game(game):
     game['blue_pieces'] = {}
     game['red_lost'] = []
     game['blue_lost'] = []
+
+
+def handle_arrange_pieces(game, sid, pieces):
+    """处理军棋布阵，返回是否双方都已完成布阵"""
+    # 验证玩家身份并保存棋子位置
+    if sid == game['red_player']:
+        game['red_arranged'] = True
+        game['red_pieces'] = {}
+        game['red_lost'] = []  # 红方阵亡棋子列表
+        # 保存红方棋子信息
+        for piece_data in pieces:
+            row = piece_data['row']
+            col = piece_data['col']
+            piece_type = piece_data['type']
+            key = f"{row}_{col}"
+            game['red_pieces'][key] = {
+                'type': piece_type,
+                'color': 'red'
+            }
+            # 在棋盘上标记有棋子（但不显示类型）
+            game['board'][row][col] = {'color': 'red'}
+
+    elif sid == game['blue_player']:
+        game['blue_arranged'] = True
+        game['blue_pieces'] = {}
+        game['blue_lost'] = []  # 蓝方阵亡棋子列表
+        # 保存蓝方棋子信息
+        for piece_data in pieces:
+            row = piece_data['row']
+            col = piece_data['col']
+            piece_type = piece_data['type']
+            key = f"{row}_{col}"
+            game['blue_pieces'][key] = {
+                'type': piece_type,
+                'color': 'blue'
+            }
+            # 在棋盘上标记有棋子
+            game['board'][row][col] = {'color': 'blue'}
+
+    # 检查双方是否都已完成布阵
+    return game['red_arranged'] and game['blue_arranged']
+
+
+def start_arranged_game(game, room_id):
+    """开始布阵完成的军棋游戏"""
+    game['current_player'] = 1  # 红方先手
+
+    # 通知红方游戏开始，包含对方棋子位置（但不含类型）
+    blue_positions = [{'row': int(k.split('_')[0]), 'col': int(k.split('_')[1])}
+                     for k in game['blue_pieces'].keys()]
+    socketio.emit('game_begin', {
+        'message': '双方布阵完成，游戏开始！',
+        'current_player': 1,
+        'opponent_pieces': blue_positions
+    }, to=game['red_player'])
+
+    # 通知蓝方游戏开始，包含对方棋子位置（但不含类型）
+    red_positions = [{'row': int(k.split('_')[0]), 'col': int(k.split('_')[1])}
+                    for k in game['red_pieces'].keys()]
+    socketio.emit('game_begin', {
+        'message': '双方布阵完成，游戏开始！',
+        'current_player': 1,
+        'opponent_pieces': red_positions
+    }, to=game['blue_player'])
+
+
+def notify_arrange_start(game):
+    """通知双方开始布阵"""
+    socketio.emit('game_start', {
+        'message': '游戏开始！请布置您的棋子',
+        'first_player': 'red',
+        'player_color': 'red'
+    }, to=game['red_player'])
+    socketio.emit('game_start', {
+        'message': '游戏开始！请布置您的棋子',
+        'first_player': 'red',
+        'player_color': 'blue'
+    }, to=game['blue_player'])

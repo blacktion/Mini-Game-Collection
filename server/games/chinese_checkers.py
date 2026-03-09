@@ -9,6 +9,31 @@ socketio = None
 games = None
 
 
+def initialize_chinese_checkers_game(sid):
+    """初始化中国跳棋游戏数据"""
+    return {
+        'game_type': 'chinese_checkers',
+        'players': [
+            {'sid': sid, 'color': 'red', 'joined': True},
+            {'sid': None, 'color': 'green', 'joined': False},
+            {'sid': None, 'color': 'yellow', 'joined': False},
+            {'sid': None, 'color': 'blue', 'joined': False},
+            {'sid': None, 'color': 'orange', 'joined': False},
+            {'sid': None, 'color': 'purple', 'joined': False}
+        ],
+        'board': initialize_chinese_checkers_board(),
+        'current_player': 1,  # 红方先手
+        'game_over': False,
+        'game_started': False,  # 新增：游戏是否已开始
+        'winner': None,
+        'moves': [],
+        'last_move': None,      # 记录上一步移动
+        'last_move_path': [],   # 记录完整的跳跃路径
+        'undo_requested': False,  # 是否有待处理的悔棋请求
+        'last_undo_player': None  # 上次悔棋的玩家sid
+    }
+
+
 def initialize_chinese_checkers_board():
     """初始化中国跳棋棋盘（六角星形）"""
     # 使用二维数组表示六角星棋盘

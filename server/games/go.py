@@ -7,6 +7,24 @@ socketio = None
 games = None
 
 
+def initialize_go_game(sid):
+    """初始化围棋游戏数据"""
+    return {
+        'game_type': 'go',
+        'black_player': None,
+        'white_player': None,
+        'black_choice': None,
+        'white_choice': None,
+        'board': [[0]*19 for _ in range(19)],
+        'current_player': 1,
+        'game_over': False,
+        'winner': None,
+        'moves': [],
+        'undo_requested': False,
+        'last_undo_player': None
+    }
+
+
 def get_go_liberties(board, row, col, player, visited=None):
     """获取围棋棋子的气（自由度）"""
     if visited is None:
@@ -150,3 +168,69 @@ def reset_go_game(game):
     game['moves'] = []
     game['black_choice'] = None
     game['white_choice'] = None
+
+
+def assign_go_player(game, sid):
+    """分配围棋玩家颜色"""
+    if game['black_player'] is None:
+        game['black_player'] = sid
+        return 'black'
+    elif game['white_player'] is None:
+        game['white_player'] = sid
+        return 'white'
+    return None
+
+
+def record_go_choice(game, sid, choice):
+    """记录围棋玩家的先后手选择"""
+    if game['black_player'] == sid:
+        game['black_choice'] = choice
+    elif game['white_player'] == sid:
+        game['white_choice'] = choice
+
+
+def should_start_go(game):
+    """检查是否可以开始围棋游戏"""
+    return game['black_choice'] is not None and game['white_choice'] is not None
+
+
+def determine_go_first_player(game):
+    """确定围棋先后手"""
+    if game['black_choice'] == 'first':
+        # 黑棋先手
+        is_black_first = True
+    else:
+        # 白棋先手
+        is_black_first = False
+    return is_black_first
+
+
+def get_go_current_player_sid(game):
+    """获取当前轮到的玩家sid"""
+    return game['black_player'] if game['current_player'] == 1 else game['white_player']
+
+
+def get_go_opponent_sid(game, sid):
+    """获取对手的sid"""
+    return game['white_player'] if sid == game['black_player'] else game['black_player']
+
+
+def handle_go_disconnect(game, sid):
+    """处理围棋玩家断开连接，返回对手sid"""
+    if game['black_player'] == sid or game['white_player'] == sid:
+        opponent = get_go_opponent_sid(game, sid)
+        return [opponent] if opponent else []
+    return []
+
+
+def handle_go_surrender(game, sid):
+    """处理围棋认输，返回(赢家编号, 赢家sid, 输家sid)"""
+    winner = 2 if sid == game['black_player'] else 1
+    winner_sid = game['black_player'] if winner == 1 else game['white_player']
+    loser_sid = game['white_player'] if winner == 1 else game['black_player']
+    return winner, winner_sid, loser_sid
+
+
+def get_go_winner_name(winner):
+    """获取围棋赢家名称"""
+    return '黑棋' if winner == 1 else '白棋'
