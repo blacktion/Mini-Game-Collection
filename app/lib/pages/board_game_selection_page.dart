@@ -4,6 +4,7 @@ import 'gobang/gobang_home_page.dart';
 import 'chinese_chess/chinese_chess_home_page.dart';
 import 'go/go_home_page.dart';
 import 'army_chess/army_chess_home_page.dart';
+import 'flip_army_chess/flip_army_chess_home_page.dart';
 import 'othello/othello_home_page.dart';
 import 'chinese_checkers/chinese_checkers_home_page.dart';
 import 'international_chess/international_chess_home_page.dart';
@@ -81,6 +82,21 @@ class BoardGameSelectionPage extends StatelessWidget {
                     context,
                     MaterialPageRoute(
                       builder: (context) => const ArmyChessHomePage(),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 16),
+              BoardGameCard(
+                icon: Icons.flip,
+                title: '翻子军旗',
+                subtitle: '翻棋对战，策略趣味',
+                color: Colors.orange,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const FlipArmyChessHomePage(),
                     ),
                   );
                 },
