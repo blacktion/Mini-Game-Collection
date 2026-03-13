@@ -40,6 +40,7 @@ SERVER_URL = config.get('server_url', 'http://localhost:5000')
 from games import gobang, chinese_chess, go, othello, chinese_checkers, international_chess
 from games.army_chess import handle_army_chess_move, reset_army_chess_game  # 保留以兼容
 from games.doudizhu import handle_choose_landlord, handle_play_cards, handle_pass_turn
+from games.flip_army_chess import handle_flip_army_chess_move, reset_flip_army_chess_game  # 翻子军棋
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'game-secret-key-2026'
@@ -80,10 +81,13 @@ international_chess.games = games
 # 导入并设置军棋和斗地主模块的全局变量
 import games.army_chess as army_chess_module
 import games.doudizhu as doudizhu_module
+import games.flip_army_chess as flip_army_chess_module
 army_chess_module.socketio = socketio
 army_chess_module.games = games
 doudizhu_module.socketio = socketio
 doudizhu_module.games = games
+flip_army_chess_module.socketio = socketio
+flip_army_chess_module.games = games
 
 
 @app.route('/')
@@ -183,10 +187,14 @@ def handle_disconnect():
                 opponent_sids = army_chess_module.handle_army_chess_disconnect(game, sid)
                 if opponent_sids:
                     is_connected = True
-            elif game['game_type'] == 'othello':
-                opponent_sids = othello.handle_othello_disconnect(game, sid)
+            elif game['game_type'] == 'flip_army_chess':
+                opponent_sids = flip_army_chess_module.handle_flip_army_chess_disconnect(game, sid)
                 if opponent_sids:
                     is_connected = True
+            elif game['game_type'] == 'othello':
+                    opponent_sids = othello.handle_othello_disconnect(game, sid)
+                    if opponent_sids:
+                        is_connected = True
             elif game['game_type'] == 'international_chess':
                 opponent_sids = international_chess.handle_international_chess_disconnect(game, sid)
                 if opponent_sids:
@@ -246,6 +254,10 @@ def handle_create_room(data):
             player_color = 'black'
         elif game_type == 'army_chess':
             games[room_id] = army_chess_module.initialize_army_chess_game(sid)
+            games[room_id]['red_player'] = sid
+            player_color = 'red'
+        elif game_type == 'flip_army_chess':
+            games[room_id] = flip_army_chess_module.initialize_flip_army_chess_game(sid)
             games[room_id]['red_player'] = sid
             player_color = 'red'
         elif game_type == 'othello':
@@ -341,6 +353,15 @@ def handle_join_room(data):
             if player_color is None:
                 emit('error', {'message': '房间已满'})
                 return
+            else:
+                player_number = 1 if player_color == 'red' else 2
+        elif game['game_type'] == 'flip_army_chess':
+            player_color = flip_army_chess_module.assign_flip_army_chess_player(game, sid)
+            if player_color is None:
+                emit('error', {'message': '房间已满'})
+                return
+            else:
+                player_number = 1 if player_color == 'red' else 2
         elif game['game_type'] == 'international_chess':
             if game['white_player'] is None:
                 game['white_player'] = sid
@@ -460,6 +481,9 @@ def handle_join_room(data):
             elif game['game_type'] == 'army_chess':
                 if game['red_player'] and game['blue_player']:
                     socketio.emit('waiting_for_choices', {'message': '双方已连接，请选择先后手'}, to=room_id)
+            elif game['game_type'] == 'flip_army_chess':
+                if game['red_player'] and game['blue_player']:
+                    socketio.emit('waiting_for_choices', {'message': '双方已连接，请选择先后手'}, to=room_id)
             elif game['game_type'] == 'othello':
                 if game['black_player'] and game['white_player']:
                     socketio.emit('waiting_for_choices', {'message': '双方已连接，请选择先后手'}, to=room_id)
@@ -494,6 +518,8 @@ def handle_choose_color(data):
             go.record_go_choice(game, sid, choice)
         elif game['game_type'] == 'army_chess':
             army_chess_module.record_army_chess_choice(game, sid, choice)
+        elif game['game_type'] == 'flip_army_chess':
+            flip_army_chess_module.record_flip_army_chess_choice(game, sid, choice)
         elif game['game_type'] == 'othello':
             othello.record_othello_choice(game, sid, choice)
         elif game['game_type'] == 'international_chess':
@@ -570,6 +596,38 @@ def handle_choose_color(data):
                 army_chess_module.determine_army_chess_first_player(game)
                 # 通知双方开始布阵（红方总是先手）
                 army_chess_module.notify_arrange_start(game)
+        elif game['game_type'] == 'flip_army_chess':
+            if flip_army_chess_module.should_start_flip_army_chess(game):
+                flip_army_chess_module.determine_flip_army_chess_first_player(game)
+                # 初始化并打乱棋子
+                flip_army_chess_module.initialize_flip_army_chess_pieces(game)
+                
+                # 准备棋盘数据（所有棋子位置，但都是盖住的）
+                all_piece_positions = []
+                for key in game['pieces']:
+                    row = int(key.split('_')[0])
+                    col = int(key.split('_')[1])
+                    all_piece_positions.append({
+                        'row': row,
+                        'col': col,
+                        'flipped': False  # 初始都是盖住的
+                    })
+                
+                # 通知双方游戏开始，包含所有棋子位置
+                socketio.emit('game_start', {
+                    'message': '游戏开始！',
+                    'first_player': 'red',
+                    'player_color': 'red',
+                    'current_player': 1,
+                    'pieces': all_piece_positions  # 发送所有棋子位置
+                }, to=game['red_player'])
+                socketio.emit('game_start', {
+                    'message': '游戏开始！',
+                    'first_player': 'red',
+                    'player_color': 'blue',
+                    'current_player': 1,
+                    'pieces': all_piece_positions  # 发送所有棋子位置
+                }, to=game['blue_player'])
 
         elif game['game_type'] == 'othello':
             if othello.should_start_othello(game):
@@ -748,6 +806,8 @@ def handle_make_move(data):
             go.handle_go_move(game, room_id, sid, data)
         elif game['game_type'] == 'army_chess':
             army_chess_module.handle_army_chess_move(game, room_id, sid, data)
+        elif game['game_type'] == 'flip_army_chess':
+            flip_army_chess_module.handle_flip_army_chess_move(game, room_id, sid, data)
         elif game['game_type'] == 'othello':
             othello.handle_othello_move(game, room_id, sid, data)
         elif game['game_type'] == 'chinese_checkers':
@@ -780,6 +840,9 @@ def handle_play_again(data):
             socketio.emit('reset_game', {'message': '请重新选择先后手'}, to=room_id)
         elif game['game_type'] == 'army_chess':
             army_chess_module.reset_army_chess_game(game)
+            socketio.emit('reset_game', {'message': '请重新选择先后手'}, to=room_id)
+        elif game['game_type'] == 'flip_army_chess':
+            flip_army_chess_module.reset_flip_army_chess_game(game)
             socketio.emit('reset_game', {'message': '请重新选择先后手'}, to=room_id)
         elif game['game_type'] == 'othello':
             othello.reset_othello_game(game)
@@ -832,6 +895,8 @@ def handle_surrender(data):
             loser_sid = sid
         elif game['game_type'] == 'army_chess':
             winner, winner_sid, loser_sid = army_chess_module.handle_army_chess_surrender(game, sid)
+        elif game['game_type'] == 'flip_army_chess':
+            winner, winner_sid, loser_sid = flip_army_chess_module.handle_flip_army_chess_surrender(game, sid)
         else:  # doudizhu
             emit('error', {'message': '斗地主暂不支持认输'})
             return
@@ -853,6 +918,8 @@ def handle_surrender(data):
             winner_name = '某位玩家'
         elif game['game_type'] == 'army_chess':
             winner_name = army_chess_module.get_army_chess_winner_name(winner)
+        elif game['game_type'] == 'flip_army_chess':
+            winner_name = flip_army_chess_module.get_flip_army_chess_winner_name(winner)
         else:
             winner_name = '某方'
 
@@ -948,7 +1015,7 @@ def handle_undo_request(data):
     print(f"移动记录数: {len(game.get('moves', []))}")
 
     # 斗地主和军棋不支持悔棋
-    if game['game_type'] in ['doudizhu', 'army_chess']:
+    if game['game_type'] in ['doudizhu', 'army_chess', 'flip_army_chess']:
         emit('error', {'message': '该游戏不支持悔棋'})
         return
 
@@ -1038,7 +1105,7 @@ def handle_undo_response(data):
     game = games[room_id]
 
     # 斗地主和军棋不支持悔棋
-    if game['game_type'] in ['doudizhu', 'army_chess']:
+    if game['game_type'] in ['doudizhu', 'army_chess', 'flip_army_chess']:
         return
 
     # 检查游戏是否结束
@@ -1185,6 +1252,8 @@ def handle_draw_request(data):
         opponent_sid = chinese_chess.get_chinese_chess_opponent_sid(game, sid)
     elif game['game_type'] == 'army_chess':
         opponent_sid = army_chess_module.get_army_chess_opponent_sid(game, sid)
+    elif game['game_type'] == 'flip_army_chess':
+        opponent_sid = flip_army_chess_module.get_flip_army_chess_opponent_sid(game, sid)
     elif game['game_type'] == 'checkers':
         opponent_sid = game['red_player'] if current_player == 1 else game['blue_player']
     elif game['game_type'] == 'gobang':
