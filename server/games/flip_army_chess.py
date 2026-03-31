@@ -756,3 +756,34 @@ def reset_flip_army_chess_game(game):
     game['blue_lost'] = []
     game['pieces'] = {}
     game['flipped_pieces'] = set()
+
+
+def handle_flip_army_chess_game_start(game):
+    """翻子军棋确定先后手并通知双方开始游戏"""
+    determine_flip_army_chess_first_player(game)
+    initialize_flip_army_chess_pieces(game)
+    
+    all_piece_positions = []
+    for key in game['pieces']:
+        row = int(key.split('_')[0])
+        col = int(key.split('_')[1])
+        all_piece_positions.append({
+            'row': row,
+            'col': col,
+            'flipped': False
+        })
+    
+    socketio.emit('game_start', {
+        'message': '游戏开始！',
+        'first_player': 'red',
+        'player_color': 'red',
+        'current_player': 1,
+        'pieces': all_piece_positions
+    }, to=game['red_player'])
+    socketio.emit('game_start', {
+        'message': '游戏开始！',
+        'first_player': 'red',
+        'player_color': 'blue',
+        'current_player': 1,
+        'pieces': all_piece_positions
+    }, to=game['blue_player'])

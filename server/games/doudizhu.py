@@ -410,3 +410,83 @@ def handle_pass_turn(games, room_id, sid, data, socketio, emit):
     # 轮到下一位玩家
     game['current_player'] = (player_number % 3) + 1
     print(f"Player {player_number} passed, next: {game['current_player']}")
+
+
+def initialize_doudizhu_game(sid):
+    """初始化斗地主游戏"""
+    return {
+        'game_type': 'doudizhu',
+        'player1': sid,
+        'player2': None,
+        'player3': None,
+        'player1_cards': [],
+        'player2_cards': [],
+        'player3_cards': [],
+        'landlord_cards': [],
+        'landlord': None,
+        'landlord_calls': {},
+        'current_player': None,
+        'last_played_cards': [],
+        'last_played_player': None,
+        'pass_count': 0,
+        'game_over': False,
+        'winner': None
+    }
+
+
+def assign_doudizhu_player(game, sid):
+    """分配斗地主玩家，返回 player_number 或 None（已满）"""
+    if game['player1'] is None:
+        game['player1'] = sid
+        return 1
+    elif game['player2'] is None:
+        game['player2'] = sid
+        return 2
+    elif game['player3'] is None:
+        game['player3'] = sid
+        return 3
+    return None
+
+
+def handle_doudizhu_disconnect(game, sid):
+    """处理斗地主玩家断线，返回其他玩家sid列表"""
+    opponent_sids = []
+    if game['player1'] == sid or game['player2'] == sid or game['player3'] == sid:
+        if game['player1'] != sid and game['player1'] is not None:
+            opponent_sids.append(game['player1'])
+        if game['player2'] != sid and game['player2'] is not None:
+            opponent_sids.append(game['player2'])
+        if game['player3'] != sid and game['player3'] is not None:
+            opponent_sids.append(game['player3'])
+    return opponent_sids
+
+
+def start_doudizhu_game(game, room_id):
+    """开始斗地主游戏"""
+    try:
+        deck = shuffle_deck(create_doudizhu_deck())
+        player1_cards, player2_cards, player3_cards, landlord_cards = deal_cards(deck)
+
+        game['player1_cards'] = player1_cards
+        game['player2_cards'] = player2_cards
+        game['player3_cards'] = player3_cards
+        game['landlord_cards'] = landlord_cards
+        game['landlord'] = None
+        game['landlord_calls'] = {}
+        game['last_played_cards'] = []
+        game['last_played_player'] = None
+        game['pass_count'] = 0
+
+        for i, player_sid in enumerate([game['player1'], game['player2'], game['player3']], 1):
+            cards_key = f'player{i}_cards'
+            if game[cards_key]:
+                socketio.emit('cards_dealt', {
+                    'my_cards': game[cards_key],
+                    'player_number': i
+                }, to=player_sid)
+
+        socketio.emit('game_start', {
+            'message': '游戏开始！请选择是否叫地主'
+        }, to=room_id)
+    except Exception as e:
+        print(f"Error in start_doudizhu_game: {e}")

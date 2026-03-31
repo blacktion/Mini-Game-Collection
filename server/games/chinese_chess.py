@@ -445,3 +445,22 @@ def reset_chess_game(game):
     game['moves'] = []
     game['red_choice'] = None
     game['black_choice'] = None
+
+
+def handle_chinese_chess_game_start(game):
+    """中国象棋确定先后手并通知双方开始游戏"""
+    determine_chinese_chess_first_player(game)
+    board_data = prepare_chinese_chess_board_data(game)
+
+    socketio.emit('game_start', {
+        'message': '游戏开始！红方先手',
+        'first_player': 'red',
+        'player_color': 'red',
+        'board': board_data
+    }, to=game['red_player'])
+    socketio.emit('game_start', {
+        'message': '游戏开始！黑方后手',
+        'first_player': 'red',
+        'player_color': 'black',
+        'board': board_data
+    }, to=game['black_player'])

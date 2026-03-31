@@ -234,3 +234,45 @@ def handle_go_surrender(game, sid):
 def get_go_winner_name(winner):
     """获取围棋赢家名称"""
     return '黑棋' if winner == 1 else '白棋'
+
+
+def execute_go_undo(game, last_move):
+    """执行围棋悔棋"""
+    row = last_move['row']
+    col = last_move['col']
+    game['board'][row][col] = 0
+
+
+def handle_go_game_start(game):
+    """围棋确定先后手并通知双方开始游戏"""
+    import random
+    
+    if game['black_choice'] == game['white_choice']:
+        first_player_sid = random.choice([game['black_player'], game['white_player']])
+        is_black_first = (first_player_sid == game['black_player'])
+    else:
+        first_choice_sid = game['black_player'] if game['black_choice'] == 'first' else game['white_player']
+        is_black_first = (first_choice_sid == game['black_player'])
+
+    if is_black_first:
+        socketio.emit('game_start', {
+            'message': '游戏开始！黑棋先手',
+            'first_player': 'black',
+            'player_color': 'black'
+        }, to=game['black_player'])
+        socketio.emit('game_start', {
+            'message': '游戏开始！白棋后手',
+            'first_player': 'black',
+            'player_color': 'white'
+        }, to=game['white_player'])
+    else:
+        socketio.emit('game_start', {
+            'message': '游戏开始！黑棋后手',
+            'first_player': 'white',
+            'player_color': 'white'
+        }, to=game['black_player'])
+        socketio.emit('game_start', {
+            'message': '游戏开始！白棋先手',
+            'first_player': 'white',
+            'player_color': 'black'
+        }, to=game['white_player'])

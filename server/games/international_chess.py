@@ -769,3 +769,52 @@ def execute_international_chess_undo(game, last_move):
         game['board'][to_row][to_col] = last_move['captured']
     else:
         game['board'][to_row][to_col] = 0
+
+
+def handle_international_chess_game_start(game):
+    """国际象棋确定先后手并通知双方开始游戏"""
+    import random
+    
+    if game['white_choice'] == game['black_choice']:
+        first_player_sid = random.choice([game['white_player'], game['black_player']])
+        is_white_first = (first_player_sid == game['white_player'])
+    else:
+        first_choice_sid = game['white_player'] if game['white_choice'] == 'first' else game['black_player']
+        is_white_first = (first_choice_sid == game['white_player'])
+
+    if is_white_first:
+        game['current_player'] = 1
+        socketio.emit('game_start', {
+            'message': '游戏开始！白方先手',
+            'first_player': 'white',
+            'player': 1,
+            'player_color': 'white',
+            'board': game['board'],
+            'current_player': 1
+        }, to=game['white_player'])
+        socketio.emit('game_start', {
+            'message': '游戏开始！白方先手',
+            'first_player': 'white',
+            'player': 2,
+            'player_color': 'black',
+            'board': game['board'],
+            'current_player': 1
+        }, to=game['black_player'])
+    else:
+        game['current_player'] = -1
+        socketio.emit('game_start', {
+            'message': '游戏开始！黑方先手',
+            'first_player': 'black',
+            'player': 2,
+            'player_color': 'white',
+            'board': game['board'],
+            'current_player': -1
+        }, to=game['white_player'])
+        socketio.emit('game_start', {
+            'message': '游戏开始！黑方先手',
+            'first_player': 'black',
+            'player': 1,
+            'player_color': 'black',
+            'board': game['board'],
+            'current_player': -1
+        }, to=game['black_player'])
