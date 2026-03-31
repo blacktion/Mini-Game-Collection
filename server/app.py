@@ -39,7 +39,7 @@ SERVER_URL = config.get('server_url', 'http://localhost:5000')
 # 导入游戏模块
 from games import gobang, chinese_chess, go, othello, chinese_checkers, international_chess
 from games.army_chess import handle_army_chess_move, reset_army_chess_game  # 保留以兼容
-from games.doudizhu import handle_choose_landlord, handle_play_cards, handle_pass_turn
+from games.doudizhu import handle_choose_landlord, handle_play_cards, handle_pass_turn, initialize_doudizhu_game, assign_doudizhu_player, handle_doudizhu_disconnect, start_doudizhu_game
 from games.flip_army_chess import handle_flip_army_chess_move, reset_flip_army_chess_game  # 翻子军棋
 
 app = Flask(__name__)
@@ -89,6 +89,43 @@ doudizhu_module.games = games
 flip_army_chess_module.socketio = socketio
 flip_army_chess_module.games = games
 
+# 游戏模块注册表：game_type -> module
+GAME_MODULES = {
+    'gobang': gobang,
+    'chinese_chess': chinese_chess,
+    'go': go,
+    'othello': othello,
+    'chinese_checkers': chinese_checkers,
+    'international_chess': international_chess,
+    'army_chess': army_chess_module,
+    'flip_army_chess': flip_army_chess_module,
+    'doudizhu': doudizhu_module,
+}
+
+# 不支持悔棋的游戏类型
+UNDO_UNSUPPORTED_GAMES = {'doudizhu', 'army_chess', 'flip_army_chess'}
+
+
+def get_game_current_player_sid(game):
+    """根据游戏类型获取当前玩家的 sid"""
+    game_type = game['game_type']
+    module = GAME_MODULES.get(game_type)
+    if module:
+        handler = getattr(module, f'get_{game_type}_current_player_sid', None)
+        if handler:
+            return handler(game)
+    return None
+
+
+def execute_game_undo(game, last_move):
+    """根据游戏类型执行悔棋"""
+    game_type = game['game_type']
+    module = GAME_MODULES.get(game_type)
+    if module:
+        handler = getattr(module, f'execute_{game_type}_undo', None)
+        if handler:
+            handler(game, last_move)
+
 
 @app.route('/')
 def index():
@@ -123,30 +160,10 @@ def handle_start_game(data):
             emit('error', {'message': '该游戏不支持此功能'})
             return
 
-        # 验证是否为房主（第一个加入的玩家）
-        host_player = game['players'][0]
-        if host_player['sid'] != sid:
-            emit('error', {'message': '只有房主可以开始游戏'})
+        success, error_msg = chinese_checkers.start_chinese_checkers_game(game, room_id, sid)
+        if not success:
+            emit('error', {'message': error_msg})
             return
-
-        # 检查是否有至少2个玩家
-        joined_players = [p for p in game['players'] if p['joined']]
-        if len(joined_players) < 2:
-            emit('error', {'message': '至少需要2个玩家才能开始游戏'})
-            return
-
-        # 开始游戏
-        game['game_started'] = True
-        player_colors = [p['color'] for p in joined_players]
-        
-        socketio.emit('game_start', {
-            'message': f'游戏开始！{len(joined_players)}人游戏，红方先手',
-            'first_player': 1,
-            'player_colors': player_colors,
-            'board': game['board']
-        }, to=room_id)
-        
-        print(f"Game started in room {room_id} by host {sid}")
         
     except Exception as e:
         print(f"Error in handle_start_game: {e}")
@@ -163,48 +180,21 @@ def handle_disconnect():
         # 清理断开玩家所在的房间
         rooms_to_remove = []
         for room_id, game in list(games.items()):
-            opponent_sids = []
-            is_connected = False
+            game_type = game['game_type']
+            module = GAME_MODULES.get(game_type)
+            
+            # 获取对应的 disconnect 处理函数
+            if module:
+                disconnect_handler = getattr(module, f'handle_{game_type}_disconnect', None)
+                if disconnect_handler:
+                    opponent_sids = disconnect_handler(game, sid)
+                else:
+                    # chinese_checkers 等没有 disconnect 函数的游戏，使用 gobang 的处理
+                    opponent_sids = gobang.handle_gobang_disconnect(game, sid)
+            else:
+                opponent_sids = []
 
-            if game['game_type'] == 'doudizhu':
-                if game['player1'] == sid or game['player2'] == sid or game['player3'] == sid:
-                    is_connected = True
-                    if game['player1'] != sid:
-                        opponent_sids.append(game['player1'])
-                    if game['player2'] != sid:
-                        opponent_sids.append(game['player2'])
-                    if game['player3'] != sid:
-                        opponent_sids.append(game['player3'])
-            elif game['game_type'] == 'chinese_chess':
-                opponent_sids = chinese_chess.handle_chinese_chess_disconnect(game, sid)
-                if opponent_sids:
-                    is_connected = True
-            elif game['game_type'] == 'go':
-                opponent_sids = go.handle_go_disconnect(game, sid)
-                if opponent_sids:
-                    is_connected = True
-            elif game['game_type'] == 'army_chess':
-                opponent_sids = army_chess_module.handle_army_chess_disconnect(game, sid)
-                if opponent_sids:
-                    is_connected = True
-            elif game['game_type'] == 'flip_army_chess':
-                opponent_sids = flip_army_chess_module.handle_flip_army_chess_disconnect(game, sid)
-                if opponent_sids:
-                    is_connected = True
-            elif game['game_type'] == 'othello':
-                    opponent_sids = othello.handle_othello_disconnect(game, sid)
-                    if opponent_sids:
-                        is_connected = True
-            elif game['game_type'] == 'international_chess':
-                opponent_sids = international_chess.handle_international_chess_disconnect(game, sid)
-                if opponent_sids:
-                    is_connected = True
-            else:  # gobang
-                opponent_sids = gobang.handle_gobang_disconnect(game, sid)
-                if opponent_sids:
-                    is_connected = True
-
-            if is_connected:
+            if opponent_sids:
                 # 通知其他玩家已断开
                 for opponent_sid in opponent_sids:
                     if opponent_sid and opponent_sid != sid:
@@ -268,25 +258,7 @@ def handle_create_room(data):
             games[room_id] = chinese_checkers.initialize_chinese_checkers_game(sid)
             player_color = 'red'
         elif game_type == 'doudizhu':
-            games[room_id] = {
-                'game_type': 'doudizhu',
-                'player1': None,
-                'player2': None,
-                'player3': None,
-                'player1_cards': [],
-                'player2_cards': [],
-                'player3_cards': [],
-                'landlord_cards': [],
-                'landlord': None,
-                'landlord_calls': {},
-                'current_player': None,
-                'last_played_cards': [],
-                'last_played_player': None,
-                'pass_count': 0,
-                'game_over': False,
-                'winner': None
-            }
-            games[room_id]['player1'] = sid
+            games[room_id] = doudizhu_module.initialize_doudizhu_game(sid)
             player_number = 1
         elif game_type == 'international_chess':
             games[room_id] = international_chess.initialize_international_chess_game(sid)
@@ -336,16 +308,8 @@ def handle_join_room(data):
         player_number = None
 
         if game['game_type'] == 'doudizhu':
-            if game['player1'] is None:
-                game['player1'] = sid
-                player_number = 1
-            elif game['player2'] is None:
-                game['player2'] = sid
-                player_number = 2
-            elif game['player3'] is None:
-                game['player3'] = sid
-                player_number = 3
-            else:
+            player_number = doudizhu_module.assign_doudizhu_player(game, sid)
+            if player_number is None:
                 emit('error', {'message': '房间已满'})
                 return
         elif game['game_type'] == 'army_chess':
@@ -393,48 +357,8 @@ def handle_join_room(data):
                 emit('error', {'message': '房间已满'})
                 return
         elif game['game_type'] == 'chinese_checkers':
-            # 寻找空位加入
-            # 对于双人游戏，第二人应分配到对面位置
-            player_info = None
-            player_index = -1
-            
-            # 检查是否是双人游戏模式（只有房主和一个对手）
-            joined_count = sum(1 for p in game['players'] if p['joined'])
-            
-            if joined_count == 1:  # 只有房主加入了，现在是第二个人加入
-                # 在双人模式中，让第二人坐在对面（蓝色位置）
-                # 查找蓝色位置
-                for i, player in enumerate(game['players']):
-                    if player['color'] == 'blue' and not player['joined']:
-                        player_info = player
-                        player_index = i
-                        break
-                # 如果没找到蓝色位置（理论上不会发生），则使用第一个可用位置
-                if player_info is None:
-                    for i, player in enumerate(game['players']):
-                        if not player['joined']:
-                            player_info = player
-                            player_index = i
-                            break
-            else:
-                # 非双人模式或多人游戏，按顺序分配
-                for i, player in enumerate(game['players']):
-                    if not player['joined']:
-                        player_info = player
-                        player_index = i
-                        break
-            
-            if player_info:
-                print(f"设置玩家信息前: {player_info}")
-                print(f"请求SID: {sid}")
-                player_info['sid'] = sid
-                player_info['joined'] = True
-                player_color = player_info['color']
-                player_number = player_index + 1
-                print(f"玩家加入房间 {room_id}: 分配颜色 {player_color}, 索引 {player_index}")
-                print(f"设置玩家信息后: {player_info}")
-                print(f"当前房间玩家状态: {[{'color': p['color'], 'sid': p['sid'], 'joined': p['joined']} for p in game['players']]}")
-            else:
+            player_color, player_number = chinese_checkers.assign_chinese_checkers_player(game, sid)
+            if player_color is None:
                 emit('error', {'message': '房间已满'})
                 return
         else:  # gobang default
@@ -466,7 +390,7 @@ def handle_join_room(data):
         # 检查是否所有玩家都已加入
         if game['game_type'] == 'doudizhu':
             if game['player1'] and game['player2'] and game['player3']:
-                _start_doudizhu_game(game, room_id)
+                doudizhu_module.start_doudizhu_game(game, room_id)
         elif game['game_type'] == 'chinese_checkers':
             # 对于中国跳棋，不再自动开始游戏，由房主手动开始
             pass
@@ -525,10 +449,7 @@ def handle_choose_color(data):
         elif game['game_type'] == 'international_chess':
             international_chess.record_international_chess_choice(game, sid, choice)
         elif game['game_type'] == 'chinese_checkers':
-            if game['red_player'] == sid:
-                game['red_choice'] = choice
-            elif game['blue_player'] == sid:
-                game['blue_choice'] = choice
+            chinese_checkers.record_chinese_checkers_choice(game, sid, choice)
         else:  # gobang
             if game['black_player'] == sid:
                 game['black_choice'] = choice
@@ -538,220 +459,29 @@ def handle_choose_color(data):
         # 检查是否两人都已选择
         if game['game_type'] == 'chinese_chess':
             if chinese_chess.should_start_chinese_chess(game):
-                chinese_chess.determine_chinese_chess_first_player(game)
-
-                # 准备棋盘数据
-                board_data = chinese_chess.prepare_chinese_chess_board_data(game)
-
-                # 通知双方结果
-                socketio.emit('game_start', {
-                    'message': '游戏开始！红方先手',
-                    'first_player': 'red',
-                    'player_color': 'red',
-                    'board': board_data
-                }, to=game['red_player'])
-                socketio.emit('game_start', {
-                    'message': '游戏开始！黑方后手',
-                    'first_player': 'red',
-                    'player_color': 'black',
-                    'board': board_data
-                }, to=game['black_player'])
-
+                chinese_chess.handle_chinese_chess_game_start(game)
         elif game['game_type'] == 'go':
             if go.should_start_go(game):
-                # 确定先后手
-                if game['black_choice'] == game['white_choice']:
-                    first_player_sid = random.choice([game['black_player'], game['white_player']])
-                    is_black_first = (first_player_sid == game['black_player'])
-                else:
-                    first_choice_sid = game['black_player'] if game['black_choice'] == 'first' else game['white_player']
-                    is_black_first = (first_choice_sid == game['black_player'])
-
-                # 通知双方结果
-                if is_black_first:
-                    socketio.emit('game_start', {
-                        'message': '游戏开始！黑棋先手',
-                        'first_player': 'black',
-                        'player_color': 'black'
-                    }, to=game['black_player'])
-                    socketio.emit('game_start', {
-                        'message': '游戏开始！白棋后手',
-                        'first_player': 'black',
-                        'player_color': 'white'
-                    }, to=game['white_player'])
-                else:
-                    socketio.emit('game_start', {
-                        'message': '游戏开始！黑棋后手',
-                        'first_player': 'white',
-                        'player_color': 'white'
-                    }, to=game['black_player'])
-                    socketio.emit('game_start', {
-                        'message': '游戏开始！白棋先手',
-                        'first_player': 'white',
-                        'player_color': 'black'
-                    }, to=game['white_player'])
-
+                go.handle_go_game_start(game)
         elif game['game_type'] == 'army_chess':
             if army_chess_module.should_start_army_chess(game):
                 army_chess_module.determine_army_chess_first_player(game)
-                # 通知双方开始布阵（红方总是先手）
                 army_chess_module.notify_arrange_start(game)
         elif game['game_type'] == 'flip_army_chess':
             if flip_army_chess_module.should_start_flip_army_chess(game):
-                flip_army_chess_module.determine_flip_army_chess_first_player(game)
-                # 初始化并打乱棋子
-                flip_army_chess_module.initialize_flip_army_chess_pieces(game)
-                
-                # 准备棋盘数据（所有棋子位置，但都是盖住的）
-                all_piece_positions = []
-                for key in game['pieces']:
-                    row = int(key.split('_')[0])
-                    col = int(key.split('_')[1])
-                    all_piece_positions.append({
-                        'row': row,
-                        'col': col,
-                        'flipped': False  # 初始都是盖住的
-                    })
-                
-                # 通知双方游戏开始，包含所有棋子位置
-                socketio.emit('game_start', {
-                    'message': '游戏开始！',
-                    'first_player': 'red',
-                    'player_color': 'red',
-                    'current_player': 1,
-                    'pieces': all_piece_positions  # 发送所有棋子位置
-                }, to=game['red_player'])
-                socketio.emit('game_start', {
-                    'message': '游戏开始！',
-                    'first_player': 'red',
-                    'player_color': 'blue',
-                    'current_player': 1,
-                    'pieces': all_piece_positions  # 发送所有棋子位置
-                }, to=game['blue_player'])
-
+                flip_army_chess_module.handle_flip_army_chess_game_start(game)
         elif game['game_type'] == 'othello':
             if othello.should_start_othello(game):
-                # 黑白棋总是黑棋先手
-                socketio.emit('game_start', {
-                    'message': '游戏开始！黑棋先手',
-                    'first_player': 'black',
-                    'player': 1,
-                    'player_color': 'black',
-                    'board': game['board'],
-                    'current_player': 1
-                }, to=game['black_player'])
-                socketio.emit('game_start', {
-                    'message': '游戏开始！白棋后手',
-                    'first_player': 'black',
-                    'player': 2,
-                    'player_color': 'white',
-                    'board': game['board'],
-                    'current_player': 1
-                }, to=game['white_player'])
+                othello.handle_othello_game_start(game)
         elif game['game_type'] == 'international_chess':
             if international_chess.should_start_international_chess(game):
-                # 确定先后手
-                if game['white_choice'] == game['black_choice']:
-                    # 选择相同，随机决定
-                    first_player_sid = random.choice([game['white_player'], game['black_player']])
-                    is_white_first = (first_player_sid == game['white_player'])
-                else:
-                    first_choice_sid = game['white_player'] if game['white_choice'] == 'first' else game['black_player']
-                    is_white_first = (first_choice_sid == game['white_player'])
-
-                # 确定先后手
-                if is_white_first:
-                    game['current_player'] = 1  # 白方先手
-                    socketio.emit('game_start', {
-                        'message': '游戏开始！白方先手',
-                        'first_player': 'white',
-                        'player': 1,
-                        'player_color': 'white',
-                        'board': game['board'],
-                        'current_player': 1
-                    }, to=game['white_player'])
-                    socketio.emit('game_start', {
-                        'message': '游戏开始！白方先手',
-                        'first_player': 'white',
-                        'player': 2,
-                        'player_color': 'black',
-                        'board': game['board'],
-                        'current_player': 1
-                    }, to=game['black_player'])
-                else:
-                    game['current_player'] = -1  # 黑方先手
-                    socketio.emit('game_start', {
-                        'message': '游戏开始！黑方先手',
-                        'first_player': 'black',
-                        'player': 2,
-                        'player_color': 'white',
-                        'board': game['board'],
-                        'current_player': -1
-                    }, to=game['white_player'])
-                    socketio.emit('game_start', {
-                        'message': '游戏开始！黑方先手',
-                        'first_player': 'black',
-                        'player': 1,
-                        'player_color': 'black',
-                        'board': game['board'],
-                        'current_player': -1
-                    }, to=game['black_player'])
+                international_chess.handle_international_chess_game_start(game)
         elif game['game_type'] == 'chinese_checkers':
-            if game['red_choice'] and game['blue_choice']:
-                # 确定先后手
-                if game['red_choice'] == game['blue_choice']:
-                    first_player_sid = random.choice([game['red_player'], game['blue_player']])
-                    is_red_first = (first_player_sid == game['red_player'])
-                else:
-                    first_choice_sid = game['red_player'] if game['red_choice'] == 'first' else game['blue_player']
-                    is_red_first = (first_choice_sid == game['red_player'])
-
-                # 如果蓝方先手，交换红蓝身份
-                if not is_red_first:
-                    game['red_player'], game['blue_player'] = game['blue_player'], game['red_player']
-                    game['red_choice'], game['blue_choice'] = game['blue_choice'], game['red_choice']
-
-                # 通知双方结果
-                socketio.emit('game_start', {
-                    'message': '游戏开始！红方先手',
-                    'first_player': 'red',
-                    'player_color': 'red',
-                    'board': game['board']
-                }, to=game['red_player'])
-                socketio.emit('game_start', {
-                    'message': '游戏开始！蓝方后手',
-                    'first_player': 'red',
-                    'player_color': 'blue',
-                    'board': game['board']
-                }, to=game['blue_player'])
-
+            if chinese_checkers.should_start_chinese_checkers(game):
+                chinese_checkers.determine_chinese_checkers_first_player(game)
         else:  # gobang
             if gobang.should_start_gobang(game):
-                is_black_first = gobang.determine_gobang_first_player(game)
-
-                # 通知双方结果
-                if is_black_first:
-                    socketio.emit('game_start', {
-                        'message': '游戏开始！黑棋先手',
-                        'first_player': 'black',
-                        'player_color': 'black'
-                    }, to=game['black_player'])
-                    socketio.emit('game_start', {
-                        'message': '游戏开始！白棋后手',
-                        'first_player': 'black',
-                        'player_color': 'white'
-                    }, to=game['white_player'])
-                else:
-                    socketio.emit('game_start', {
-                        'message': '游戏开始！黑棋后手',
-                        'first_player': 'white',
-                        'player_color': 'white'
-                    }, to=game['black_player'])
-                    socketio.emit('game_start', {
-                        'message': '游戏开始！白棋先手',
-                        'first_player': 'white',
-                        'player_color': 'black'
-                    }, to=game['white_player'])
+                gobang.handle_gobang_game_start(game)
     except Exception as e:
         print(f"Error in handle_choose_color: {e}")
 
@@ -798,24 +528,17 @@ def handle_make_move(data):
             return
 
         game = games[room_id]
-
-        # 根据游戏类型调用相应的处理函数
-        if game['game_type'] == 'chinese_chess':
-            chinese_chess.handle_chess_move(game, room_id, sid, data)
-        elif game['game_type'] == 'go':
-            go.handle_go_move(game, room_id, sid, data)
-        elif game['game_type'] == 'army_chess':
-            army_chess_module.handle_army_chess_move(game, room_id, sid, data)
-        elif game['game_type'] == 'flip_army_chess':
-            flip_army_chess_module.handle_flip_army_chess_move(game, room_id, sid, data)
-        elif game['game_type'] == 'othello':
-            othello.handle_othello_move(game, room_id, sid, data)
-        elif game['game_type'] == 'chinese_checkers':
-            chinese_checkers.handle_chinese_checkers_move(game, room_id, sid, data)
-        elif game['game_type'] == 'international_chess':
-            international_chess.handle_international_chess_move(game, room_id, sid, data)
-        else:  # gobang
-            gobang.handle_gobang_move(game, room_id, sid, data)
+        game_type = game['game_type']
+        module = GAME_MODULES.get(game_type)
+        
+        if module:
+            # chinese_chess 使用 handle_chess_move，其他使用标准命名
+            if game_type == 'chinese_chess':
+                module.handle_chess_move(game, room_id, sid, data)
+            else:
+                move_handler = getattr(module, f'handle_{game_type}_move', None)
+                if move_handler:
+                    move_handler(game, room_id, sid, data)
     except Exception as e:
         print(f"Error in handle_make_move: {e}")
 
@@ -830,32 +553,21 @@ def handle_play_again(data):
             return
 
         game = games[room_id]
-
-        # 根据游戏类型重置游戏
-        if game['game_type'] == 'chinese_chess':
-            chinese_chess.reset_chess_game(game)
-            socketio.emit('reset_game', {'message': '请重新选择先后手'}, to=room_id)
-        elif game['game_type'] == 'go':
-            go.reset_go_game(game)
-            socketio.emit('reset_game', {'message': '请重新选择先后手'}, to=room_id)
-        elif game['game_type'] == 'army_chess':
-            army_chess_module.reset_army_chess_game(game)
-            socketio.emit('reset_game', {'message': '请重新选择先后手'}, to=room_id)
-        elif game['game_type'] == 'flip_army_chess':
-            flip_army_chess_module.reset_flip_army_chess_game(game)
-            socketio.emit('reset_game', {'message': '请重新选择先后手'}, to=room_id)
-        elif game['game_type'] == 'othello':
-            othello.reset_othello_game(game)
-            socketio.emit('reset_game', {'message': '请重新选择先后手'}, to=room_id)
-        elif game['game_type'] == 'chinese_checkers':
-            chinese_checkers.reset_chinese_checkers_game(game)
-            socketio.emit('reset_game', {'message': '游戏已重置'}, to=room_id)
-        elif game['game_type'] == 'international_chess':
-            international_chess.reset_international_chess_game(game)
-            socketio.emit('reset_game', {'message': '请重新选择先后手'}, to=room_id)
-        else:  # gobang
-            gobang.reset_gobang_game(game)
-            socketio.emit('reset_game', {'message': '请重新选择先后手'}, to=room_id)
+        game_type = game['game_type']
+        module = GAME_MODULES.get(game_type)
+        
+        if module:
+            # chinese_chess 使用 reset_chess_game，其他使用标准命名
+            if game_type == 'chinese_chess':
+                module.reset_chess_game(game)
+            else:
+                reset_handler = getattr(module, f'reset_{game_type}_game', None)
+                if reset_handler:
+                    reset_handler(game)
+            
+            # chinese_checkers 的消息不同
+            message = '游戏已重置' if game_type == 'chinese_checkers' else '请重新选择先后手'
+            socketio.emit('reset_game', {'message': message}, to=room_id)
     except Exception as e:
         print(f"Error in handle_play_again: {e}")
 
@@ -877,70 +589,54 @@ def handle_surrender(data):
             emit('error', {'message': '游戏已结束'})
             return
 
-        # 确定赢家（对方）和双方sid
-        if game['game_type'] == 'chinese_chess':
-            winner, winner_sid, loser_sid = chinese_chess.handle_chinese_chess_surrender(game, sid)
-        elif game['game_type'] == 'gobang':
-            winner, winner_sid, loser_sid = gobang.handle_gobang_surrender(game, sid)
-        elif game['game_type'] == 'go':
-            winner, winner_sid, loser_sid = go.handle_go_surrender(game, sid)
-        elif game['game_type'] == 'othello':
-            winner, winner_sid, loser_sid = othello.handle_othello_surrender(game, sid)
-        elif game['game_type'] == 'international_chess':
-            winner, winner_sid, loser_sid = international_chess.handle_international_chess_surrender(game, sid)
-        elif game['game_type'] == 'chinese_checkers':
-            # 中国跳棋认输逻辑
-            winner = 1  # 简化处理，实际应该找出其他玩家
-            winner_sid = None
-            loser_sid = sid
-        elif game['game_type'] == 'army_chess':
-            winner, winner_sid, loser_sid = army_chess_module.handle_army_chess_surrender(game, sid)
-        elif game['game_type'] == 'flip_army_chess':
-            winner, winner_sid, loser_sid = flip_army_chess_module.handle_flip_army_chess_surrender(game, sid)
-        else:  # doudizhu
+        game_type = game['game_type']
+        
+        # doudizhu 不支持认输
+        if game_type == 'doudizhu':
             emit('error', {'message': '斗地主暂不支持认输'})
             return
+        
+        # chinese_checkers 特殊处理
+        if game_type == 'chinese_checkers':
+            winner = 1  # 简化处理
+            winner_sid = None
+            loser_sid = sid
+            winner_name = '某位玩家'
+        else:
+            module = GAME_MODULES.get(game_type)
+            if not module:
+                return
+            
+            surrender_handler = getattr(module, f'handle_{game_type}_surrender', None)
+            if not surrender_handler:
+                return
+            
+            winner, winner_sid, loser_sid = surrender_handler(game, sid)
+            
+            winner_name_handler = getattr(module, f'get_{game_type}_winner_name', None)
+            winner_name = winner_name_handler(winner) if winner_name_handler else '某方'
 
         game['game_over'] = True
         game['winner'] = winner
 
-        if game['game_type'] == 'chinese_chess':
-            winner_name = chinese_chess.get_chinese_chess_winner_name(winner)
-        elif game['game_type'] == 'gobang':
-            winner_name = gobang.get_gobang_winner_name(winner)
-        elif game['game_type'] == 'go':
-            winner_name = go.get_go_winner_name(winner)
-        elif game['game_type'] == 'othello':
-            winner_name = othello.get_othello_winner_name(winner)
-        elif game['game_type'] == 'international_chess':
-            winner_name = international_chess.get_international_chess_winner_name(winner)
-        elif game['game_type'] == 'chinese_checkers':
-            winner_name = '某位玩家'
-        elif game['game_type'] == 'army_chess':
-            winner_name = army_chess_module.get_army_chess_winner_name(winner)
-        elif game['game_type'] == 'flip_army_chess':
-            winner_name = flip_army_chess_module.get_flip_army_chess_winner_name(winner)
-        else:
-            winner_name = '某方'
-
         # 分别给赢家和输家发送不同的消息
-        if game['game_type'] in ['gobang', 'go', 'othello', 'international_chess', 'chinese_chess', 'army_chess']:
-            # 给赢家发送：你赢了，对手认输
-            socketio.emit('game_over', {
-                'winner': winner,
-                'message': f'{winner_name}获胜！对手认输。'
-            }, to=winner_sid)
-            # 给输家发送：你认输了
-            socketio.emit('game_over', {
-                'winner': winner,
-                'message': '你认输了。'
-            }, to=loser_sid)
-        else:
-            # 其他游戏类型，统一广播（如中国跳棋）
+        # chinese_checkers 和 flip_army_chess 广播，其他发送给特定玩家
+        if game_type in ['chinese_checkers', 'flip_army_chess']:
             socketio.emit('game_over', {
                 'winner': winner,
                 'message': f'{winner_name}获胜！对手认输。'
             }, to=room_id)
+        else:
+            # 给赢家发送
+            socketio.emit('game_over', {
+                'winner': winner,
+                'message': f'{winner_name}获胜！对手认输。'
+            }, to=winner_sid)
+            # 给输家发送
+            socketio.emit('game_over', {
+                'winner': winner,
+                'message': '你认输了。'
+            }, to=loser_sid)
     except Exception as e:
         print(f"Error in handle_surrender: {e}")
 
@@ -1015,7 +711,7 @@ def handle_undo_request(data):
     print(f"移动记录数: {len(game.get('moves', []))}")
 
     # 斗地主和军棋不支持悔棋
-    if game['game_type'] in ['doudizhu', 'army_chess', 'flip_army_chess']:
+    if game['game_type'] in UNDO_UNSUPPORTED_GAMES:
         emit('error', {'message': '该游戏不支持悔棋'})
         return
 
@@ -1033,30 +729,9 @@ def handle_undo_request(data):
     current_player = game['current_player']
     print(f"当前玩家编号: {current_player}")
         
-    # 根据游戏类型获取对手 sid
-    if game['game_type'] == 'chinese_chess':
-        player_sid = chinese_chess.get_chinese_chess_current_player_sid(game)
-        print(f"象棋对手SID: {player_sid}")
-    elif game['game_type'] == 'go':
-        player_sid = go.get_go_current_player_sid(game)
-        print(f"围棋对手SID: {player_sid}")
-    elif game['game_type'] == 'othello':
-        player_sid = othello.get_othello_current_player_sid(game)
-    elif game['game_type'] == 'international_chess':
-        player_sid = international_chess.get_international_chess_current_player_sid(game)
-        print(f"国际象棋对手SID: {player_sid}")
-    elif game['game_type'] == 'chinese_checkers':
-        # 跳棋：向当前轮到的玩家发送悔棋请求
-        # current_player是当前轮到的玩家，也就是需要同意悔棋的玩家
-        current_player_info = game['players'][current_player - 1]
-        player_sid = current_player_info['sid']
-        print(f"跳棋当前轮到玩家SID: {player_sid}, 玩家信息: {current_player_info}")
-    elif game['game_type'] == 'checkers':
-        player_sid = game['red_player'] if current_player == 1 else game['blue_player']
-        print(f"西洋跳棋对手SID: {player_sid}")
-    else:  # gobang
-        player_sid = gobang.get_gobang_current_player_sid(game)
-        print(f"五子棋对手SID: {player_sid}")
+    # 根据游戏类型获取当前轮到的玩家 sid
+    player_sid = get_game_current_player_sid(game)
+    print(f"当前轮到玩家SID: {player_sid}")
 
     # 检查是否已经有待处理的悔棋请求
     if game.get('undo_requested', False):
@@ -1105,7 +780,7 @@ def handle_undo_response(data):
     game = games[room_id]
 
     # 斗地主和军棋不支持悔棋
-    if game['game_type'] in ['doudizhu', 'army_chess', 'flip_army_chess']:
+    if game['game_type'] in UNDO_UNSUPPORTED_GAMES:
         return
 
     # 检查游戏是否结束
@@ -1113,22 +788,7 @@ def handle_undo_response(data):
         return
 
     # 获取当前玩家（轮到的那一方）
-    current_player = game['current_player']
-    if game['game_type'] == 'chinese_chess':
-        current_sid = chinese_chess.get_chinese_chess_current_player_sid(game)
-    elif game['game_type'] == 'go':
-        current_sid = go.get_go_current_player_sid(game)
-    elif game['game_type'] == 'othello':
-        current_sid = othello.get_othello_current_player_sid(game)
-    elif game['game_type'] == 'chinese_checkers':
-        # 跳棋：根据当前玩家编号获取对应的玩家SID
-        current_player_index = (current_player - 1) % len(game['players'])
-        current_player_info = game['players'][current_player_index]
-        current_sid = current_player_info['sid']
-    elif game['game_type'] == 'checkers':
-        current_sid = game['red_player'] if current_player == 1 else game['blue_player']
-    elif game['game_type'] == 'gobang':
-        current_sid = gobang.get_gobang_current_player_sid(game)
+    current_sid = get_game_current_player_sid(game)
 
     # 只有轮到的一方才能响应
     if sid != current_sid:
@@ -1143,49 +803,7 @@ def handle_undo_response(data):
             return
 
         last_move = game['moves'].pop()
-
-        if game['game_type'] == 'chinese_chess':
-            chinese_chess.execute_chinese_chess_undo(game, last_move)
-        elif game['game_type'] == 'go':
-            # 围棋悔棋：清除最后一子
-            row = last_move['row']
-            col = last_move['col']
-            game['board'][row][col] = 0
-        elif game['game_type'] == 'othello':
-            othello.execute_othello_undo(game, last_move)
-        elif game['game_type'] == 'chinese_checkers':
-            # 跳棋悔棋
-            from_row = last_move['from_row']
-            from_col = last_move['from_col']
-            to_row = last_move['to_row']
-            to_col = last_move['to_col']
-            
-            # 恢复棋子到原位置
-            piece = game['board'][to_row][to_col]
-            game['board'][from_row][from_col] = piece
-            game['board'][to_row][to_col] = None
-            
-            # 恢复上一步路径
-            path = last_move.get('path', [])
-            if path:
-                game['last_move_path'] = path
-            else:
-                game['last_move_path'] = [[from_row, from_col], [to_row, to_col]]
-        elif game['game_type'] == 'international_chess':
-            # 国际象棋悔棋
-            from_row = last_move['from']['row']
-            from_col = last_move['from']['col']
-            to_row = last_move['to']['row']
-            to_col = last_move['to']['col']
-            # 恢复棋子到原位置
-            game['board'][from_row][from_col] = game['board'][to_row][to_col]
-            # 恢复被吃的棋子
-            if last_move.get('captured') != 0:
-                game['board'][to_row][to_col] = last_move['captured']
-            else:
-                game['board'][to_row][to_col] = 0
-        elif game['game_type'] == 'gobang':
-            gobang.execute_gobang_undo(game, last_move)
+        execute_game_undo(game, last_move)
 
         # 切换回之前的玩家
         game['current_player'] = last_move['player']
@@ -1244,33 +862,30 @@ def handle_draw_request(data):
         socketio.emit('error', {'message': '游戏已结束'}, to=sid)
         return
 
-    # 获取当前玩家编号
-    current_player = game['current_player']
-
+    game_type = game['game_type']
+    module = GAME_MODULES.get(game_type)
+    
     # 根据游戏类型获取对手 sid
-    if game['game_type'] == 'chinese_chess':
-        opponent_sid = chinese_chess.get_chinese_chess_opponent_sid(game, sid)
-    elif game['game_type'] == 'army_chess':
-        opponent_sid = army_chess_module.get_army_chess_opponent_sid(game, sid)
-    elif game['game_type'] == 'flip_army_chess':
-        opponent_sid = flip_army_chess_module.get_flip_army_chess_opponent_sid(game, sid)
-    elif game['game_type'] == 'checkers':
+    if module:
+        opponent_handler = getattr(module, f'get_{game_type}_opponent_sid', None)
+        if opponent_handler:
+            opponent_sid = opponent_handler(game, sid)
+        else:
+            # chinese_checkers, doudizhu 等没有 opponent 函数的游戏
+            opponent_sid = None
+    elif game_type == 'checkers':
+        # 特殊处理 checkers 类型
+        current_player = game['current_player']
         opponent_sid = game['red_player'] if current_player == 1 else game['blue_player']
-    elif game['game_type'] == 'gobang':
-        opponent_sid = gobang.get_gobang_opponent_sid(game, sid)
-    elif game['game_type'] == 'othello':
-        opponent_sid = othello.get_othello_opponent_sid(game, sid)
-    elif game['game_type'] == 'go':
-        opponent_sid = go.get_go_opponent_sid(game, sid)
-    else:  # chess
-        opponent_sid = game['white_player'] if current_player == 1 else game['black_player']
+    else:
+        opponent_sid = None
 
-    # 通知对方有和棋请求
-    socketio.emit('draw_request', {
-        'room_id': room_id
-    }, to=opponent_sid)
-
-    print(f"Draw request from {sid} in room {room_id}")
+    if opponent_sid:
+        # 通知对方有和棋请求
+        socketio.emit('draw_request', {
+            'room_id': room_id
+        }, to=opponent_sid)
+        print(f"Draw request from {sid} in room {room_id}")
 
 
 @socketio.on('draw_response')
@@ -1301,44 +916,6 @@ def handle_draw_response(data):
         print(f"Draw approved in room {room_id}")
     else:
         print(f"Draw rejected in room {room_id}")
-
-
-def _start_doudizhu_game(game, room_id):
-    """开始斗地主游戏"""
-    try:
-        from games.doudizhu import create_doudizhu_deck, shuffle_deck, deal_cards
-
-        # 创建并洗牌
-        deck = shuffle_deck(create_doudizhu_deck())
-
-        # 发牌
-        player1_cards, player2_cards, player3_cards, landlord_cards = deal_cards(deck)
-
-        # 保存到游戏数据
-        game['player1_cards'] = player1_cards
-        game['player2_cards'] = player2_cards
-        game['player3_cards'] = player3_cards
-        game['landlord_cards'] = landlord_cards
-        game['landlord'] = None
-        game['landlord_calls'] = {}
-        game['last_played_cards'] = []
-        game['last_played_player'] = None
-        game['pass_count'] = 0
-
-        # 分别发送手牌给每个玩家
-        for i, player_sid in enumerate([game['player1'], game['player2'], game['player3']], 1):
-            cards_key = f'player{i}_cards'
-            if game[cards_key]:
-                socketio.emit('cards_dealt', {
-                    'my_cards': game[cards_key],
-                    'player_number': i
-                }, to=player_sid)
-
-        socketio.emit('game_start', {
-            'message': '游戏开始！请选择是否叫地主'
-        }, to=room_id)
-    except Exception as e:
-        print(f"Error in _start_doudizhu_game: {e}")
 
 
 if __name__ == '__main__':

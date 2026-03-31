@@ -297,3 +297,23 @@ def execute_othello_undo(game, last_move):
     if 'flipped' in last_move:
         for flipped_pos in last_move['flipped']:
             game['board'][flipped_pos['row']][flipped_pos['col']] = flipped_pos['old_color']
+
+
+def handle_othello_game_start(game):
+    """黑白棋开始游戏（黑棋总是先手）"""
+    socketio.emit('game_start', {
+        'message': '游戏开始！黑棋先手',
+        'first_player': 'black',
+        'player': 1,
+        'player_color': 'black',
+        'board': game['board'],
+        'current_player': 1
+    }, to=game['black_player'])
+    socketio.emit('game_start', {
+        'message': '游戏开始！白棋后手',
+        'first_player': 'black',
+        'player': 2,
+        'player_color': 'white',
+        'board': game['board'],
+        'current_player': 1
+    }, to=game['white_player'])

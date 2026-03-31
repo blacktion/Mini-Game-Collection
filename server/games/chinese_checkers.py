@@ -547,3 +547,137 @@ def reset_chinese_checkers_game(game):
     game['game_over'] = False
     game['winner'] = None
     game['moves'] = []
+
+
+def get_chinese_checkers_current_player_sid(game):
+    """获取中国跳棋当前轮到的玩家 sid"""
+    current_player = game['current_player']
+    current_player_info = game['players'][current_player - 1]
+    return current_player_info['sid']
+
+
+def execute_chinese_checkers_undo(game, last_move):
+    """执行中国跳棋悔棋"""
+    from_row = last_move['from_row']
+    from_col = last_move['from_col']
+    to_row = last_move['to_row']
+    to_col = last_move['to_col']
+    
+    # 恢复棋子到原位置
+    piece = game['board'][to_row][to_col]
+    game['board'][from_row][from_col] = piece
+    game['board'][to_row][to_col] = None
+    
+    # 恢复上一步路径
+    path = last_move.get('path', [])
+    if path:
+        game['last_move_path'] = path
+    else:
+        game['last_move_path'] = [[from_row, from_col], [to_row, to_col]]
+
+
+def assign_chinese_checkers_player(game, sid):
+    """分配中国跳棋玩家位置，返回 (player_color, player_number) 或 (None, None)"""
+    player_info = None
+    player_index = -1
+    
+    joined_count = sum(1 for p in game['players'] if p['joined'])
+    
+    if joined_count == 1:
+        for i, player in enumerate(game['players']):
+            if player['color'] == 'blue' and not player['joined']:
+                player_info = player
+                player_index = i
+                break
+        if player_info is None:
+            for i, player in enumerate(game['players']):
+                if not player['joined']:
+                    player_info = player
+                    player_index = i
+                    break
+    else:
+        for i, player in enumerate(game['players']):
+            if not player['joined']:
+                player_info = player
+                player_index = i
+                break
+    
+    if player_info:
+        print(f"设置玩家信息前: {player_info}")
+        print(f"请求SID: {sid}")
+        player_info['sid'] = sid
+        player_info['joined'] = True
+        player_color = player_info['color']
+        player_number = player_index + 1
+        print(f"玩家加入房间: 分配颜色 {player_color}, 索引 {player_index}")
+        print(f"设置玩家信息后: {player_info}")
+        print(f"当前房间玩家状态: {[{'color': p['color'], 'sid': p['sid'], 'joined': p['joined']} for p in game['players']]}")
+        return (player_color, player_number)
+    
+    return (None, None)
+
+
+def start_chinese_checkers_game(game, room_id, sid):
+    """房主开始中国跳棋游戏，返回 (success, error_message)"""
+    host_player = game['players'][0]
+    if host_player['sid'] != sid:
+        return (False, '只有房主可以开始游戏')
+    
+    joined_players = [p for p in game['players'] if p['joined']]
+    if len(joined_players) < 2:
+        return (False, '至少需要2个玩家才能开始游戏')
+    
+    game['game_started'] = True
+    player_colors = [p['color'] for p in joined_players]
+    
+    socketio.emit('game_start', {
+        'message': f'游戏开始！{len(joined_players)}人游戏，红方先手',
+        'first_player': 1,
+        'player_colors': player_colors,
+        'board': game['board']
+    }, to=room_id)
+    
+    print(f"Game started in room {room_id} by host {sid}")
+    return (True, None)
+
+
+def record_chinese_checkers_choice(game, sid, choice):
+    """记录中国跳棋玩家的先后手选择"""
+    if game.get('red_player') == sid:
+        game['red_choice'] = choice
+    elif game.get('blue_player') == sid:
+        game['blue_choice'] = choice
+
+
+def should_start_chinese_checkers(game):
+    """检查中国跳棋是否两人都已选择先后手"""
+    return bool(game.get('red_choice') and game.get('blue_choice'))
+
+
+def determine_chinese_checkers_first_player(game):
+    """确定中国跳棋先后手并通知双方"""
+    import random
+    
+    if game['red_choice'] == game['blue_choice']:
+        first_player_sid = random.choice([game['red_player'], game['blue_player']])
+        is_red_first = (first_player_sid == game['red_player'])
+    else:
+        first_choice_sid = game['red_player'] if game['red_choice'] == 'first' else game['blue_player']
+        is_red_first = (first_choice_sid == game['red_player'])
+
+    if not is_red_first:
+        game['red_player'], game['blue_player'] = game['blue_player'], game['red_player']
+        game['red_choice'], game['blue_choice'] = game['blue_choice'], game['red_choice']
+
+    socketio.emit('game_start', {
+        'message': '游戏开始！红方先手',
+        'first_player': 'red',
+        'player_color': 'red',
+        'board': game['board']
+    }, to=game['red_player'])
+    socketio.emit('game_start', {
+        'message': '游戏开始！蓝方后手',
+        'first_player': 'red',
+        'player_color': 'blue',
+        'board': game['board']
+    }, to=game['blue_player'])

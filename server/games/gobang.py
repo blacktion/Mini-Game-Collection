@@ -226,3 +226,31 @@ def reset_gobang_game(game):
     game['moves'] = []
     game['black_choice'] = None
     game['white_choice'] = None
+
+
+def handle_gobang_game_start(game):
+    """五子棋确定先后手并通知双方开始游戏"""
+    is_black_first = determine_gobang_first_player(game)
+
+    if is_black_first:
+        socketio.emit('game_start', {
+            'message': '游戏开始！黑棋先手',
+            'first_player': 'black',
+            'player_color': 'black'
+        }, to=game['black_player'])
+        socketio.emit('game_start', {
+            'message': '游戏开始！白棋后手',
+            'first_player': 'black',
+            'player_color': 'white'
+        }, to=game['white_player'])
+    else:
+        socketio.emit('game_start', {
+            'message': '游戏开始！黑棋后手',
+            'first_player': 'white',
+            'player_color': 'white'
+        }, to=game['black_player'])
+        socketio.emit('game_start', {
+            'message': '游戏开始！白棋先手',
+            'first_player': 'white',
+            'player_color': 'black'
+        }, to=game['white_player'])
